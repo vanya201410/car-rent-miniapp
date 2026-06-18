@@ -163,6 +163,11 @@ button {
   color: white;
 }
 
+.primary-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .back-btn {
   margin-bottom: 12px;
   background: white;

@@ -1,50 +1,20 @@
-# Car Rent Telegram Mini App — starter
+# Car Rent Telegram Mini App — v2 admin notifications
 
-Это стартовая версия Telegram Mini App для аренды машин.
+Эта версия:
+- показывает машины из Supabase;
+- отправляет заявки в Supabase;
+- отправляет админу Telegram-уведомление о новой заявке.
 
-Что умеет:
-- показывает машины из таблицы `cars` в Supabase;
-- открывает карточку машины;
-- считает цену по датам;
-- отправляет заявку в таблицу `bookings`.
+## Переменные Vercel
 
-## Нужно указать переменные окружения
-
-В Vercel добавь:
-
+Frontend:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 
-Значения возьми в Supabase: Project Settings → API.
+Serverless API:
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ADMIN_CHAT_ID`
 
-## Таблицы Supabase
-
-Ожидаются таблицы:
-
-### cars
-- id
-- brand
-- model
-- year
-- price_per_day
-- deposit
-- transmission
-- fuel_type
-- seats
-- city
-- description
-- is_active
-- created_at
-
-### bookings
-- id
-- car_id
-- customer_name
-- phone
-- start_date
-- end_date
-- days_count
-- total_price
-- status
-- comment
-- created_at
+`service_role` и `TELEGRAM_BOT_TOKEN` нельзя вставлять в код и нельзя показывать публично.
+Они должны храниться только в Vercel Environment Variables.

@@ -28,6 +28,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [bookingSent, setBookingSent] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const [form, setForm] = useState({
     customer_name: '',
@@ -92,27 +93,39 @@ function App() {
     if (!form.start_date || !form.end_date) return alert('Выберите даты.');
     if (daysCount <= 0) return alert('Дата окончания должна быть позже даты начала.');
 
-    const { error } = await supabase.from('bookings').insert({
-      car_id: selectedCar.id,
-      customer_name: form.customer_name,
-      phone: form.phone,
-      start_date: form.start_date,
-      end_date: form.end_date,
-      days_count: daysCount,
-      total_price: totalPrice,
-      status: 'new',
-      comment: form.comment || ''
-    });
+    setSending(true);
 
-    if (error) {
+    try {
+      const response = await fetch('/api/create-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          car_id: selectedCar.id,
+          customer_name: form.customer_name,
+          phone: form.phone,
+          start_date: form.start_date,
+          end_date: form.end_date,
+          days_count: daysCount,
+          total_price: totalPrice,
+          comment: form.comment || ''
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Ошибка отправки заявки');
+      }
+
+      setBookingSent(true);
+
+      const tg = window.Telegram?.WebApp;
+      tg?.HapticFeedback?.notificationOccurred?.('success');
+    } catch (error) {
       alert('Ошибка отправки заявки: ' + error.message);
-      return;
+    } finally {
+      setSending(false);
     }
-
-    setBookingSent(true);
-
-    const tg = window.Telegram?.WebApp;
-    tg?.HapticFeedback?.notificationOccurred?.('success');
   }
 
   if (bookingSent) {
@@ -120,7 +133,7 @@ function App() {
       <main className="app success-screen">
         <CheckCircle2 size={56} />
         <h1>Заявка отправлена</h1>
-        <p>Менеджер свяжется с вами и подтвердит бронь.</p>
+        <p>Менеджер получил уведомление в Telegram и скоро свяжется с вами.</p>
         <button onClick={() => {
           setBookingSent(false);
           setSelectedCar(null);
@@ -195,9 +208,9 @@ function App() {
             <textarea value={form.comment} onChange={(e) => updateForm('comment', e.target.value)} placeholder="Где удобно получить авто, вопросы, пожелания" />
           </label>
 
-          <button className="primary-btn" onClick={sendBooking}>
-            <Send size={18} />
-            Отправить заявку
+          <button className="primary-btn" onClick={sendBooking} disabled={sending}>
+            {sending ? <Loader2 size={18} className="spin" /> : <Send size={18} />}
+            {sending ? 'Отправляем...' : 'Отправить заявку'}
           </button>
         </section>
       </main>
