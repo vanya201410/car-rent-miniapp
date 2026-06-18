@@ -1,21 +1,17 @@
-# Car Rent Telegram Mini App — v8 business pack
+# Car Rent Telegram Mini App — v9 add car admin
 
-Эта версия добавляет большой бизнес-пакет:
+Эта версия добавляет красивое добавление машин прямо из Telegram.
 
-- админ-меню в Telegram через `/admin`;
-- просмотр новых и подтверждённых заявок из Telegram;
-- команды администратора:
-  - `/block car_id start_date end_date reason` — заблокировать даты вручную;
-  - `/unblock block_id` — удалить ручную блокировку;
-  - `/price car_id price` — изменить цену за день;
-  - `/hidecar car_id` — скрыть машину из каталога;
-  - `/showcar car_id` — вернуть машину в каталог;
-  - `/complete booking_id` — отметить аренду завершённой;
-- ручные блокировки дат учитываются в календаре;
-- дополнительные услуги при бронировании;
-- скидка за длительную аренду;
-- раздел клиента «Мои бронирования»;
-- галерея фото, визуальный календарь, защита от двойной брони и админ-кнопка отмены сохраняются.
+Что добавлено:
+- кнопка ➕ Добавить машину в `/admin`;
+- пошаговый мастер добавления машины;
+- бот спрашивает марку, модель, год, цену, залог, коробку, топливо, места, город и описание;
+- после создания машины можно отправить фото прямо в Telegram;
+- фото автоматически загружаются в Supabase Storage `car-photos`;
+- фото автоматически добавляются в таблицу `car_photos`;
+- команда `/done` завершает добавление фото;
+- команда `/cancel` отменяет текущий мастер;
+- весь функционал v8 сохраняется.
 
 ## SQL для Supabase
 
@@ -77,9 +73,27 @@ using (true);
 
 create index if not exists blocked_dates_car_dates_idx
 on public.blocked_dates (car_id, start_date, end_date);
+
+create table if not exists public.admin_sessions (
+  admin_id text primary key,
+  flow text not null,
+  step text not null,
+  data jsonb default '{}'::jsonb,
+  updated_at timestamptz default now()
+);
+
+alter table public.admin_sessions enable row level security;
 ```
 
-## Важно
+## Storage
 
-Webhook менять не нужно, если он уже установлен на `/api/telegram-webhook`.
-После деплоя напишите своему боту `/admin`.
+Нужен public bucket:
+
+- `car-photos`
+
+Если его нет:
+Supabase → Storage → New bucket → `car-photos` → Public bucket.
+
+## Webhook
+
+Если кнопки подтверждения уже работали, webhook менять не нужно.

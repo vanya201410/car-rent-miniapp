@@ -39,6 +39,9 @@ function adminMenuMarkup() {
   return {
     inline_keyboard: [
       [
+        { text: '➕ Добавить машину', callback_data: 'admin_add_car' }
+      ],
+      [
         { text: '🆕 Новые заявки', callback_data: 'admin_new' },
         { text: '✅ Подтверждённые', callback_data: 'admin_confirmed' }
       ],
@@ -57,8 +60,12 @@ async function sendAdminMenu(botToken, chatId, editTarget = null) {
   const text = [
     '⚙️ <b>Админ-панель аренды авто</b>',
     '',
-    'Выберите раздел или используйте команды:',
+    'Выберите раздел или используйте команды.',
     '',
+    'Самое удобное:',
+    '➕ <b>Добавить машину</b> — бот сам спросит все данные по шагам.',
+    '',
+    'Быстрые команды:',
     '<code>/block 1 2026-07-01 2026-07-03 сервис</code>',
     '<code>/price 1 90</code>',
     '<code>/hidecar 1</code>',
@@ -81,6 +88,384 @@ async function sendAdminMenu(botToken, chatId, editTarget = null) {
     parse_mode: 'HTML',
     reply_markup: adminMenuMarkup()
   });
+}
+
+async function getAdminSession(supabase, adminId) {
+  const { data, error } = await supabase
+    .from('admin_sessions')
+    .select('*')
+    .eq('admin_id', String(adminId))
+    .maybeSingle();
+
+  if (error) {
+    console.error('getAdminSession error:', error);
+    return null;
+  }
+
+  return data;
+}
+
+async function saveAdminSession(supabase, adminId, flow, step, data = {}) {
+  const { error } = await supabase
+    .from('admin_sessions')
+    .upsert({
+      admin_id: String(adminId),
+      flow,
+      step,
+      data,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'admin_id' });
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function clearAdminSession(supabase, adminId) {
+  await supabase
+    .from('admin_sessions')
+    .delete()
+    .eq('admin_id', String(adminId));
+}
+
+async function startAddCarFlow({ supabase, botToken, chatId }) {
+  await saveAdminSession(supabase, chatId, 'add_car', 'brand', {});
+  await telegramApi(botToken, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      '➕ <b>Добавляем новую машину</b>',
+      '',
+      'Я буду задавать вопросы по шагам.',
+      'В любой момент можно написать <code>/cancel</code>.',
+      '',
+      '<b>Шаг 1/11</b>',
+      'Напиши марку машины.',
+      '',
+      'Например: <code>BMW</code>'
+    ].join('\n'),
+    parse_mode: 'HTML'
+  });
+}
+
+function numberFromText(value) {
+  const normalized = String(value || '').replace(',', '.').replace(/[^\d.]/g, '');
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+function integerFromText(value) {
+  const number = parseInt(String(value || '').replace(/[^\d]/g, ''), 10);
+  return Number.isFinite(number) ? number : null;
+}
+
+async function uploadTelegramPhoto({ supabase, botToken, carId, photo }) {
+  const fileId = photo.file_id;
+
+  const fileInfo = await telegramApi(botToken, 'getFile', { file_id: fileId });
+  const filePath = fileInfo?.result?.file_path;
+
+  if (!filePath) {
+    throw new Error('Не удалось получить файл из Telegram.');
+  }
+
+  const fileUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+  const fileResponse = await fetch(fileUrl);
+
+  if (!fileResponse.ok) {
+    throw new Error('Не удалось скачать фото из Telegram.');
+  }
+
+  const arrayBuffer = await fileResponse.arrayBuffer();
+  const extension = filePath.split('.').pop() || 'jpg';
+  const storagePath = `cars/${carId}/${Date.now()}-${fileId}.${extension}`;
+
+  const { error: uploadError } = await supabase
+    .storage
+    .from('car-photos')
+    .upload(storagePath, arrayBuffer, {
+      contentType: fileResponse.headers.get('content-type') || 'image/jpeg',
+      upsert: true
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  const { data } = supabase
+    .storage
+    .from('car-photos')
+    .getPublicUrl(storagePath);
+
+  return data.publicUrl;
+}
+
+async function addCarPhoto({ supabase, carId, imageUrl, sortOrder }) {
+  const { data, error } = await supabase
+    .from('car_photos')
+    .insert({
+      car_id: carId,
+      image_url: imageUrl,
+      sort_order: sortOrder
+    })
+    .select()
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  if (sortOrder === 1) {
+    await supabase
+      .from('cars')
+      .update({ image_url: imageUrl })
+      .eq('id', carId);
+  }
+
+  return data;
+}
+
+async function handleAddCarFlow({ message, session, supabase, botToken, chatId }) {
+  const text = (message.text || '').trim();
+  const data = session.data || {};
+
+  if (text === '/cancel') {
+    await clearAdminSession(supabase, chatId);
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: 'Добавление машины отменено.'
+    });
+    return;
+  }
+
+  const step = session.step;
+
+  const prompts = {
+    model: ['<b>Шаг 2/11</b>', 'Напиши модель машины.', 'Например: <code>3 Series</code>'],
+    year: ['<b>Шаг 3/11</b>', 'Напиши год выпуска.', 'Например: <code>2021</code>'],
+    price_per_day: ['<b>Шаг 4/11</b>', 'Напиши цену за день в евро.', 'Например: <code>80</code>'],
+    deposit: ['<b>Шаг 5/11</b>', 'Напиши размер залога в евро.', 'Например: <code>500</code>'],
+    transmission: ['<b>Шаг 6/11</b>', 'Напиши коробку передач.', 'Например: <code>Автомат</code>'],
+    fuel_type: ['<b>Шаг 7/11</b>', 'Напиши тип топлива.', 'Например: <code>Бензин</code>, <code>Дизель</code>, <code>Гибрид</code>'],
+    seats: ['<b>Шаг 8/11</b>', 'Напиши количество мест.', 'Например: <code>5</code>'],
+    city: ['<b>Шаг 9/11</b>', 'Напиши город выдачи.', 'Например: <code>Barcelona</code>'],
+    description: ['<b>Шаг 10/11</b>', 'Напиши описание машины.', 'Например: <code>Комфортный седан для города и поездок.</code>']
+  };
+
+  async function next(nextStep, newData, customPrompt = null) {
+    await saveAdminSession(supabase, chatId, 'add_car', nextStep, newData);
+    const prompt = customPrompt || prompts[nextStep];
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: prompt.join('\n'),
+      parse_mode: 'HTML'
+    });
+  }
+
+  if (step !== 'photos' && !text) {
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: 'Пожалуйста, отправь текстовое значение или напиши /cancel.'
+    });
+    return;
+  }
+
+  if (step === 'brand') {
+    await next('model', { ...data, brand: text });
+    return;
+  }
+
+  if (step === 'model') {
+    await next('year', { ...data, model: text });
+    return;
+  }
+
+  if (step === 'year') {
+    const year = integerFromText(text);
+    if (!year || year < 1980 || year > 2100) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Напиши год числом. Например: 2021'
+      });
+      return;
+    }
+    await next('price_per_day', { ...data, year });
+    return;
+  }
+
+  if (step === 'price_per_day') {
+    const price = numberFromText(text);
+    if (!price) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Напиши цену числом. Например: 80'
+      });
+      return;
+    }
+    await next('deposit', { ...data, price_per_day: price });
+    return;
+  }
+
+  if (step === 'deposit') {
+    const deposit = numberFromText(text);
+    if (deposit === null) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Напиши залог числом. Например: 500'
+      });
+      return;
+    }
+    await next('transmission', { ...data, deposit });
+    return;
+  }
+
+  if (step === 'transmission') {
+    await next('fuel_type', { ...data, transmission: text });
+    return;
+  }
+
+  if (step === 'fuel_type') {
+    await next('seats', { ...data, fuel_type: text });
+    return;
+  }
+
+  if (step === 'seats') {
+    const seats = integerFromText(text);
+    if (!seats || seats < 1 || seats > 20) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Напиши количество мест числом. Например: 5'
+      });
+      return;
+    }
+    await next('city', { ...data, seats });
+    return;
+  }
+
+  if (step === 'city') {
+    await next('description', { ...data, city: text });
+    return;
+  }
+
+  if (step === 'description') {
+    const carData = { ...data, description: text, is_active: true };
+
+    const { data: car, error } = await supabase
+      .from('cars')
+      .insert(carData)
+      .select()
+      .single();
+
+    if (error) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Ошибка создания машины: ' + error.message
+      });
+      return;
+    }
+
+    await saveAdminSession(supabase, chatId, 'add_car', 'photos', {
+      ...carData,
+      car_id: car.id,
+      photo_count: 0
+    });
+
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: [
+        '✅ <b>Машина создана</b>',
+        '',
+        `<b>ID:</b> ${car.id}`,
+        `<b>Авто:</b> ${escapeHtml(car.brand)} ${escapeHtml(car.model)}`,
+        '',
+        '<b>Шаг 11/11</b>',
+        'Теперь отправь фото машины прямо сюда в Telegram.',
+        '',
+        'Можно отправить несколько фото по одному.',
+        'Также можно отправить ссылку на фото.',
+        'Когда закончишь — напиши <code>/done</code>.',
+        'Если фото пока не нужны — напиши <code>/skip</code>.'
+      ].join('\n'),
+      parse_mode: 'HTML'
+    });
+    return;
+  }
+
+  if (step === 'photos') {
+    if (text === '/done' || text === '/skip') {
+      await clearAdminSession(supabase, chatId);
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: [
+          '🎉 <b>Готово</b>',
+          '',
+          `Машина #${data.car_id} добавлена в каталог.`,
+          'Она уже должна отображаться в Mini App.',
+          '',
+          'Открой /admin, чтобы управлять заявками и машинами.'
+        ].join('\n'),
+        parse_mode: 'HTML',
+        reply_markup: adminMenuMarkup()
+      });
+      return;
+    }
+
+    let imageUrl = '';
+
+    try {
+      if (message.photo && message.photo.length) {
+        const largestPhoto = message.photo[message.photo.length - 1];
+        imageUrl = await uploadTelegramPhoto({
+          supabase,
+          botToken,
+          carId: data.car_id,
+          photo: largestPhoto
+        });
+      } else if (/^https?:\/\//i.test(text)) {
+        imageUrl = text;
+      } else {
+        await telegramApi(botToken, 'sendMessage', {
+          chat_id: chatId,
+          text: 'Отправь фото, ссылку на фото, /done или /skip.'
+        });
+        return;
+      }
+
+      const nextPhotoCount = Number(data.photo_count || 0) + 1;
+      await addCarPhoto({
+        supabase,
+        carId: data.car_id,
+        imageUrl,
+        sortOrder: nextPhotoCount
+      });
+
+      await saveAdminSession(supabase, chatId, 'add_car', 'photos', {
+        ...data,
+        photo_count: nextPhotoCount
+      });
+
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: [
+          `🖼 Фото добавлено: ${nextPhotoCount}`,
+          '',
+          'Отправь ещё фото или напиши /done.'
+        ].join('\n')
+      });
+    } catch (error) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: [
+          'Не удалось добавить фото.',
+          '',
+          'Проверь, что в Supabase Storage есть public bucket:',
+          '<code>car-photos</code>',
+          '',
+          'Ошибка: ' + escapeHtml(error.message)
+        ].join('\n'),
+        parse_mode: 'HTML'
+      });
+    }
+  }
 }
 
 async function loadCarsByIds(supabase, carIds) {
@@ -174,7 +559,12 @@ async function renderCarsList({ supabase, botToken, chatId, messageId }) {
     message_id: messageId,
     text: text || 'Машин пока нет.',
     parse_mode: 'HTML',
-    reply_markup: { inline_keyboard: [[{ text: '⬅️ Назад', callback_data: 'admin_menu' }]] }
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '➕ Добавить машину', callback_data: 'admin_add_car' }],
+        [{ text: '⬅️ Назад', callback_data: 'admin_menu' }]
+      ]
+    }
   });
 }
 
@@ -218,6 +608,20 @@ async function handleAdminCommand({ text, supabase, botToken, chatId }) {
 
   if (command === '/admin' || command === '/start') {
     await sendAdminMenu(botToken, chatId);
+    return true;
+  }
+
+  if (command === '/addcar') {
+    await startAddCarFlow({ supabase, botToken, chatId });
+    return true;
+  }
+
+  if (command === '/cancel') {
+    await clearAdminSession(supabase, chatId);
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: 'Текущий процесс отменён.'
+    });
     return true;
   }
 
@@ -298,6 +702,8 @@ async function handleAdminCommand({ text, supabase, botToken, chatId }) {
         'ℹ️ Команды администратора:',
         '',
         '/admin — открыть меню',
+        '/addcar — добавить машину по шагам',
+        '/cancel — отменить текущий процесс',
         '/block 1 2026-07-01 2026-07-03 сервис',
         '/unblock 3',
         '/price 1 90',
@@ -339,6 +745,19 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true });
       }
 
+      if (text === '/admin' || text === '/start') {
+        await clearAdminSession(supabase, chatId);
+        await handleAdminCommand({ text, supabase, botToken, chatId });
+        return res.status(200).json({ ok: true });
+      }
+
+      const session = await getAdminSession(supabase, chatId);
+
+      if (session?.flow === 'add_car') {
+        await handleAddCarFlow({ message: update.message, session, supabase, botToken, chatId });
+        return res.status(200).json({ ok: true });
+      }
+
       await handleAdminCommand({ text, supabase, botToken, chatId });
       return res.status(200).json({ ok: true });
     }
@@ -360,6 +779,12 @@ export default async function handler(req, res) {
     }
 
     const callbackData = String(callback.data || '');
+
+    if (callbackData === 'admin_add_car') {
+      await telegramApi(botToken, 'answerCallbackQuery', { callback_query_id: callback.id, text: 'Добавляем машину' });
+      await startAddCarFlow({ supabase, botToken, chatId: String(callback.message.chat.id) });
+      return res.status(200).json({ ok: true });
+    }
 
     if (callbackData === 'admin_menu') {
       await telegramApi(botToken, 'answerCallbackQuery', { callback_query_id: callback.id, text: 'Меню' });
@@ -403,6 +828,8 @@ export default async function handler(req, res) {
           'ℹ️ <b>Команды администратора</b>',
           '',
           '<code>/admin</code> — открыть меню',
+          '<code>/addcar</code> — добавить машину по шагам',
+          '<code>/cancel</code> — отменить текущий процесс',
           '<code>/block 1 2026-07-01 2026-07-03 сервис</code>',
           '<code>/unblock 3</code>',
           '<code>/price 1 90</code>',
