@@ -21,18 +21,31 @@ export default async function handler(req, res) {
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-    const { data, error } = await supabase
+    const { data: bookings, error: bookingsError } = await supabase
       .from('bookings')
       .select('id, start_date, end_date, status')
       .eq('car_id', carId)
       .eq('status', 'confirmed')
       .order('start_date', { ascending: true });
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (bookingsError) {
+      return res.status(400).json({ error: bookingsError.message });
     }
 
-    return res.status(200).json({ ok: true, busy_ranges: data || [] });
+    const { data: blocks, error: blocksError } = await supabase
+      .from('blocked_dates')
+      .select('id, start_date, end_date, reason')
+      .eq('car_id', carId)
+      .order('start_date', { ascending: true });
+
+    const safeBlocks = blocksError ? [] : (blocks || []);
+
+    const busyRanges = [
+      ...(bookings || []).map((item) => ({ ...item, type: 'booking' })),
+      ...safeBlocks.map((item) => ({ ...item, status: 'blocked', type: 'block' }))
+    ].sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)));
+
+    return res.status(200).json({ ok: true, busy_ranges: busyRanges });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: error.message || 'Unexpected server error' });

@@ -9,6 +9,51 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
 
+const EXTRA_SERVICES = [
+  { id: 'delivery', label: 'Доставка автомобиля', price: 30 },
+  { id: 'child_seat', label: 'Детское кресло', price: 20 },
+  { id: 'extra_driver', label: 'Дополнительный водитель', price: 25 },
+  { id: 'full_insurance', label: 'Расширенная страховка', price: 40 },
+  { id: 'other_return', label: 'Возврат в другом месте', price: 50 }
+];
+
+function calculatePrice(pricePerDay, daysCount, extras) {
+  if (!daysCount || !pricePerDay) {
+    return { basePrice: 0, extrasTotal: 0, totalPrice: 0, discountLabel: '' };
+  }
+
+  let multiplier = 1;
+  let discountLabel = '';
+
+  if (daysCount >= 14) {
+    multiplier = 0.85;
+    discountLabel = 'Скидка 15% за аренду от 14 дней';
+  } else if (daysCount >= 7) {
+    multiplier = 0.9;
+    discountLabel = 'Скидка 10% за аренду от 7 дней';
+  }
+
+  const basePrice = Math.round(Number(pricePerDay) * daysCount * multiplier);
+  const extrasTotal = EXTRA_SERVICES.reduce((sum, service) => {
+    return extras?.[service.id] ? sum + service.price : sum;
+  }, 0);
+
+  return {
+    basePrice,
+    extrasTotal,
+    totalPrice: basePrice + extrasTotal,
+    discountLabel
+  };
+}
+
+function bookingStatusLabel(status) {
+  if (status === 'new') return 'Ожидает подтверждения';
+  if (status === 'confirmed') return 'Подтверждена';
+  if (status === 'cancelled') return 'Отменена';
+  if (status === 'completed') return 'Завершена';
+  return status;
+}
+
 function getTelegramUser() {
   const tg = window.Telegram?.WebApp;
   return tg?.initDataUnsafe?.user || null;
@@ -315,14 +360,18 @@ function VisualCalendar({ startDate, endDate, busyRanges, onChange, loading }) {
 }
 
 function App() {
+  const [view, setView] = useState('catalog');
   const [cars, setCars] = useState([]);
   const [selectedCar, setSelectedCar] = useState(null);
   const [busyRanges, setBusyRanges] = useState([]);
+  const [myBookings, setMyBookings] = useState([]);
+  const [myBookingsLoading, setMyBookingsLoading] = useState(false);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [bookingSent, setBookingSent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [extras, setExtras] = useState({});
 
   const [form, setForm] = useState({
     customer_name: '',
@@ -348,6 +397,7 @@ function App() {
   useEffect(() => {
     if (selectedCar?.id) {
       setForm((prev) => ({ ...prev, start_date: '', end_date: '' }));
+      setExtras({});
       loadAvailability(selectedCar.id);
     }
   }, [selectedCar?.id]);
@@ -397,11 +447,44 @@ function App() {
     }
   }
 
+  async function loadMyBookings() {
+    const tgUser = getTelegramUser();
+
+    if (!tgUser?.id) {
+      alert('Раздел “Мои бронирования” работает только внутри Telegram.');
+      return;
+    }
+
+    setView('myBookings');
+    setMyBookingsLoading(true);
+
+    try {
+      const response = await fetch(`/api/my-bookings?telegram_user_id=${tgUser.id}`);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Ошибка загрузки бронирований');
+      }
+
+      setMyBookings(result.bookings || []);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setMyBookingsLoading(false);
+    }
+  }
+
+  function toggleExtra(serviceId) {
+    setExtras((prev) => ({ ...prev, [serviceId]: !prev[serviceId] }));
+  }
+
   const daysCount = useMemo(() => daysBetween(form.start_date, form.end_date), [form.start_date, form.end_date]);
-  const totalPrice = useMemo(() => {
-    if (!selectedCar || !daysCount) return 0;
-    return Number(selectedCar.price_per_day || 0) * daysCount;
-  }, [selectedCar, daysCount]);
+  const priceBreakdown = useMemo(() => {
+    if (!selectedCar) return { basePrice: 0, extrasTotal: 0, totalPrice: 0, discountLabel: '' };
+    return calculatePrice(selectedCar.price_per_day, daysCount, extras);
+  }, [selectedCar, daysCount, extras]);
+
+  const totalPrice = priceBreakdown.totalPrice;
 
   function updateForm(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -432,6 +515,9 @@ function App() {
           start_date: form.start_date,
           end_date: form.end_date,
           days_count: daysCount,
+          base_price: priceBreakdown.basePrice,
+          extras_total: priceBreakdown.extrasTotal,
+          extras,
           total_price: totalPrice,
           comment: form.comment || '',
           telegram_user_id: tgUser?.id ? String(tgUser.id) : null,
@@ -456,6 +542,49 @@ function App() {
     }
   }
 
+
+  if (view === 'myBookings') {
+    return (
+      <main className="app">
+        <button className="back-btn" onClick={() => setView('catalog')}>← В каталог</button>
+
+        <section className="hero">
+          <div className="logo-circle"><Calendar size={36} /></div>
+          <h1>Мои бронирования</h1>
+          <p>Здесь отображаются заявки, отправленные из вашего Telegram.</p>
+        </section>
+
+        {myBookingsLoading && (
+          <div className="center">
+            <Loader2 className="spin" />
+            <p>Загружаем бронирования...</p>
+          </div>
+        )}
+
+        {!myBookingsLoading && myBookings.length === 0 && (
+          <section className="card">
+            <h2>Пока нет бронирований</h2>
+            <p>Выберите автомобиль и отправьте первую заявку.</p>
+          </section>
+        )}
+
+        <section className="booking-list">
+          {myBookings.map((booking) => (
+            <article className={`booking-card status-${booking.status}`} key={booking.id}>
+              <div className="booking-card-header">
+                <h2>{booking.car?.brand || 'Авто'} {booking.car?.model || ''}</h2>
+                <span>{bookingStatusLabel(booking.status)}</span>
+              </div>
+              <p>{booking.start_date} — {booking.end_date}</p>
+              <p>{booking.days_count} дней · {booking.total_price} €</p>
+              {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
+            </article>
+          ))}
+        </section>
+      </main>
+    );
+  }
+
   if (bookingSent) {
     return (
       <main className="app success-screen">
@@ -467,6 +596,7 @@ function App() {
           setSelectedCar(null);
           setBusyRanges([]);
           setForm({ customer_name: '', phone: '', start_date: '', end_date: '', comment: '' });
+          setExtras({});
         }}>
           Вернуться в каталог
         </button>
@@ -518,6 +648,9 @@ function App() {
             <Calendar size={20} />
             <div>
               <b>{daysCount || 0} дней</b>
+              <span>Аренда: {priceBreakdown.basePrice || 0} €</span>
+              {priceBreakdown.discountLabel && <span>{priceBreakdown.discountLabel}</span>}
+              {priceBreakdown.extrasTotal > 0 && <span>Доп. услуги: {priceBreakdown.extrasTotal} €</span>}
               <span>Итого: {totalPrice || 0} €</span>
             </div>
           </div>
@@ -525,6 +658,23 @@ function App() {
           <p className="hint">
             Красные даты заняты подтверждёнными бронями. Дата возврата не считается занятым днём.
           </p>
+        </section>
+
+        <section className="card">
+          <h2>Дополнительные услуги</h2>
+          <div className="extras-list">
+            {EXTRA_SERVICES.map((service) => (
+              <label className="extra-item" key={service.id}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(extras[service.id])}
+                  onChange={() => toggleExtra(service.id)}
+                />
+                <span>{service.label}</span>
+                <b>+{service.price} €</b>
+              </label>
+            ))}
+          </div>
         </section>
 
         <section className="card">
@@ -559,6 +709,9 @@ function App() {
         <div className="logo-circle"><Car size={36} /></div>
         <h1>Аренда авто</h1>
         <p>Выберите автомобиль, даты и отправьте заявку прямо в Telegram.</p>
+        <div className="hero-actions">
+          <button className="secondary-btn" onClick={loadMyBookings}>📋 Мои бронирования</button>
+        </div>
       </section>
 
       {loading && (
