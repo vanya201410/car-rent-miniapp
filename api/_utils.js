@@ -61,3 +61,30 @@ export async function findConfirmedOverlap(supabase, carId, startDate, endDate, 
 
   return data && data.length > 0 ? data[0] : null;
 }
+
+export function bookingStatusText(status) {
+  if (status === 'new') return 'новая';
+  if (status === 'confirmed') return 'подтверждена ✅';
+  if (status === 'cancelled') return 'отменена ❌';
+  return status;
+}
+
+export function buildAdminBookingText({ title, booking, car }) {
+  return [
+    title,
+    '',
+    `<b>Авто:</b> ${escapeHtml(car?.brand || '')} ${escapeHtml(car?.model || '')}`,
+    `<b>Даты:</b> ${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)}`,
+    `<b>Дней:</b> ${escapeHtml(booking.days_count)}`,
+    `<b>Сумма:</b> ${escapeHtml(booking.total_price)} €`,
+    car?.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',
+    '',
+    `<b>Клиент:</b> ${escapeHtml(booking.customer_name)}`,
+    `<b>Телефон:</b> ${escapeHtml(booking.phone)}`,
+    booking.telegram_username ? `<b>Telegram:</b> @${escapeHtml(booking.telegram_username)}` : '',
+    booking.comment ? `<b>Комментарий:</b> ${escapeHtml(booking.comment)}` : '',
+    '',
+    `<b>ID заявки:</b> ${booking.id}`,
+    `<b>Статус:</b> ${bookingStatusText(booking.status)}`
+  ].filter(Boolean).join('\n');
+}

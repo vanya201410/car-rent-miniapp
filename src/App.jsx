@@ -189,7 +189,6 @@ function PhotoGallery({ car }) {
   );
 }
 
-
 function VisualCalendar({ startDate, endDate, busyRanges, onChange, loading }) {
   const [month, setMonth] = useState(startOfMonth(new Date()));
 

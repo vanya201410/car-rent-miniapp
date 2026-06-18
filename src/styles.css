@@ -212,7 +212,6 @@ button, input, textarea {
   display: block;
 }
 
-
 .card {
   margin-bottom: 14px;
 }
@@ -310,41 +309,6 @@ button {
   color: #6b7280;
   font-size: 14px;
   margin-bottom: 0;
-}
-
-.center {
-  display: grid;
-  place-items: center;
-  padding: 30px;
-  color: #6b7280;
-}
-
-.spin {
-  animation: spin 1s linear infinite;
-}
-
-.error-card {
-  border: 1px solid #fecaca;
-  background: #fef2f2;
-}
-
-.success-screen {
-  min-height: 92vh;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  align-content: center;
-}
-
-.success-screen button {
-  background: #111827;
-  color: white;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .visual-calendar {
@@ -505,4 +469,39 @@ button {
   margin-top: 10px;
   background: #eef2ff;
   color: #111827;
+}
+
+.center {
+  display: grid;
+  place-items: center;
+  padding: 30px;
+  color: #6b7280;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.error-card {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+}
+
+.success-screen {
+  min-height: 92vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  align-content: center;
+}
+
+.success-screen button {
+  background: #111827;
+  color: white;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
