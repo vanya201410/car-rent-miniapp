@@ -14,12 +14,57 @@ function getTelegramUser() {
   return tg?.initDataUnsafe?.user || null;
 }
 
+function parseDate(dateString) {
+  return new Date(`${dateString}T00:00:00`);
+}
+
+function formatDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date, days) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date, months) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
 function daysBetween(start, end) {
   if (!start || !end) return 0;
-  const startDate = new Date(start);
-  const endDate = new Date(end);
+  const startDate = parseDate(start);
+  const endDate = parseDate(end);
   const diff = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
   return diff > 0 ? diff : 0;
+}
+
+function isBusyDate(dateString, busyRanges) {
+  return busyRanges.some((range) => dateString >= range.start_date && dateString < range.end_date);
+}
+
+function isRangeAvailable(startDate, endDate, busyRanges) {
+  if (!startDate || !endDate) return true;
+  return !busyRanges.some((range) => startDate < range.end_date && endDate > range.start_date);
+}
+
+function buildCalendarDays(monthDate) {
+  const first = startOfMonth(monthDate);
+  const startWeekDay = (first.getDay() + 6) % 7;
+  const calendarStart = addDays(first, -startWeekDay);
+  return Array.from({ length: 42 }, (_, index) => addDays(calendarStart, index));
+}
+
+function monthTitle(date) {
+  return date.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
 }
 
 function getCarPhotos(car) {
@@ -144,9 +189,137 @@ function PhotoGallery({ car }) {
   );
 }
 
+
+function VisualCalendar({ startDate, endDate, busyRanges, onChange, loading }) {
+  const [month, setMonth] = useState(startOfMonth(new Date()));
+
+  const days = buildCalendarDays(month);
+  const weekDays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+  function handleDayClick(day) {
+    const dayString = formatDate(day);
+    const currentMonth = day.getMonth() === month.getMonth();
+
+    if (!currentMonth) return;
+
+    if (!startDate || (startDate && endDate)) {
+      if (isBusyDate(dayString, busyRanges)) {
+        alert('Эта дата уже занята. Выберите свободную дату начала.');
+        return;
+      }
+
+      onChange({ start_date: dayString, end_date: '' });
+      return;
+    }
+
+    if (dayString <= startDate) {
+      alert('Дата возврата должна быть позже даты начала.');
+      return;
+    }
+
+    if (!isRangeAvailable(startDate, dayString, busyRanges)) {
+      alert('Выбранный период пересекается с уже подтверждённой бронью.');
+      return;
+    }
+
+    onChange({ start_date: startDate, end_date: dayString });
+  }
+
+  function getDayClass(day) {
+    const dayString = formatDate(day);
+    const currentMonth = day.getMonth() === month.getMonth();
+    const busy = isBusyDate(dayString, busyRanges);
+    const selectedStart = startDate === dayString;
+    const selectedEnd = endDate === dayString;
+    const inSelectedRange = startDate && endDate && dayString > startDate && dayString < endDate;
+    const today = dayString === formatDate(new Date());
+
+    let cls = 'calendar-day';
+    if (!currentMonth) cls += ' outside';
+    if (busy) cls += ' busy';
+    if (selectedStart) cls += ' selected start';
+    if (selectedEnd) cls += ' selected end';
+    if (inSelectedRange) cls += ' in-range';
+    if (today) cls += ' today';
+
+    return cls;
+  }
+
+  return (
+    <div className="visual-calendar">
+      <div className="calendar-header">
+        <button type="button" onClick={() => setMonth(addMonths(month, -1))}>
+          <ChevronLeft size={18} />
+        </button>
+        <b>{monthTitle(month)}</b>
+        <button type="button" onClick={() => setMonth(addMonths(month, 1))}>
+          <ChevronRight size={18} />
+        </button>
+      </div>
+
+      {loading && (
+        <div className="availability-loading">
+          <Loader2 size={16} className="spin" />
+          Загружаем занятые даты...
+        </div>
+      )}
+
+      <div className="calendar-weekdays">
+        {weekDays.map((day) => <span key={day}>{day}</span>)}
+      </div>
+
+      <div className="calendar-grid">
+        {days.map((day) => {
+          const dayString = formatDate(day);
+
+          return (
+            <button
+              type="button"
+              key={dayString}
+              className={getDayClass(day)}
+              onClick={() => handleDayClick(day)}
+            >
+              {day.getDate()}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="calendar-legend">
+        <span><i className="legend-free" /> свободно</span>
+        <span><i className="legend-busy" /> занято</span>
+        <span><i className="legend-selected" /> выбрано</span>
+      </div>
+
+      <div className="selected-dates">
+        <div>
+          <span>Дата начала</span>
+          <b>{startDate || 'не выбрана'}</b>
+        </div>
+        <div>
+          <span>Дата возврата</span>
+          <b>{endDate || 'не выбрана'}</b>
+        </div>
+      </div>
+
+      {(startDate || endDate) && (
+        <button
+          type="button"
+          className="clear-dates-btn"
+          onClick={() => onChange({ start_date: '', end_date: '' })}
+        >
+          Очистить даты
+        </button>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [cars, setCars] = useState([]);
   const [selectedCar, setSelectedCar] = useState(null);
+  const [busyRanges, setBusyRanges] = useState([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [bookingSent, setBookingSent] = useState(false);
@@ -173,6 +346,13 @@ function App() {
     loadCars();
   }, []);
 
+  useEffect(() => {
+    if (selectedCar?.id) {
+      setForm((prev) => ({ ...prev, start_date: '', end_date: '' }));
+      loadAvailability(selectedCar.id);
+    }
+  }, [selectedCar?.id]);
+
   async function loadCars() {
     setLoading(true);
     setLoadError('');
@@ -198,6 +378,26 @@ function App() {
     setLoading(false);
   }
 
+  async function loadAvailability(carId) {
+    setAvailabilityLoading(true);
+    setBusyRanges([]);
+
+    try {
+      const response = await fetch(`/api/car-availability?car_id=${carId}`);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Ошибка загрузки занятых дат');
+      }
+
+      setBusyRanges(result.busy_ranges || []);
+    } catch (error) {
+      alert('Не удалось загрузить занятые даты: ' + error.message);
+    } finally {
+      setAvailabilityLoading(false);
+    }
+  }
+
   const daysCount = useMemo(() => daysBetween(form.start_date, form.end_date), [form.start_date, form.end_date]);
   const totalPrice = useMemo(() => {
     if (!selectedCar || !daysCount) return 0;
@@ -212,8 +412,11 @@ function App() {
     if (!selectedCar) return alert('Выберите автомобиль.');
     if (!form.customer_name.trim()) return alert('Введите имя.');
     if (!form.phone.trim()) return alert('Введите телефон.');
-    if (!form.start_date || !form.end_date) return alert('Выберите даты.');
-    if (daysCount <= 0) return alert('Дата окончания должна быть позже даты начала.');
+    if (!form.start_date || !form.end_date) return alert('Выберите даты в календаре.');
+    if (daysCount <= 0) return alert('Дата возврата должна быть позже даты начала.');
+    if (!isRangeAvailable(form.start_date, form.end_date, busyRanges)) {
+      return alert('Выбранный период пересекается с уже подтверждённой бронью.');
+    }
 
     setSending(true);
 
@@ -263,6 +466,7 @@ function App() {
         <button onClick={() => {
           setBookingSent(false);
           setSelectedCar(null);
+          setBusyRanges([]);
           setForm({ customer_name: '', phone: '', start_date: '', end_date: '', comment: '' });
         }}>
           Вернуться в каталог
@@ -299,15 +503,17 @@ function App() {
 
         <section className="card">
           <h2>Выберите даты</h2>
-          <label>
-            Дата начала
-            <input type="date" value={form.start_date} onChange={(e) => updateForm('start_date', e.target.value)} />
-          </label>
 
-          <label>
-            Дата окончания
-            <input type="date" value={form.end_date} onChange={(e) => updateForm('end_date', e.target.value)} />
-          </label>
+          <VisualCalendar
+            startDate={form.start_date}
+            endDate={form.end_date}
+            busyRanges={busyRanges}
+            loading={availabilityLoading}
+            onChange={(dates) => {
+              updateForm('start_date', dates.start_date);
+              updateForm('end_date', dates.end_date);
+            }}
+          />
 
           <div className="price-box">
             <Calendar size={20} />
@@ -318,7 +524,7 @@ function App() {
           </div>
 
           <p className="hint">
-            Если автомобиль уже подтверждён на выбранные даты, заявка не отправится.
+            Красные даты заняты подтверждёнными бронями. Дата возврата не считается занятым днём.
           </p>
         </section>
 

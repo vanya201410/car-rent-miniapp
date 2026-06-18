@@ -346,3 +346,163 @@ button {
     transform: rotate(360deg);
   }
 }
+
+.visual-calendar {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 22px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.calendar-header {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.calendar-header b {
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.calendar-header button {
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: white;
+}
+
+.availability-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 5px;
+}
+
+.calendar-weekdays span {
+  text-align: center;
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.calendar-day {
+  height: 38px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 12px;
+  background: white;
+  color: #111827;
+  font-weight: 700;
+}
+
+.calendar-day.outside {
+  opacity: 0.25;
+}
+
+.calendar-day.today {
+  outline: 2px solid #111827;
+  outline-offset: -2px;
+}
+
+.calendar-day.busy {
+  background: #fee2e2;
+  color: #991b1b;
+  text-decoration: line-through;
+}
+
+.calendar-day.selected {
+  background: #111827;
+  color: white;
+  text-decoration: none;
+}
+
+.calendar-day.in-range {
+  background: #dbeafe;
+  color: #1e3a8a;
+  text-decoration: none;
+}
+
+.calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.calendar-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.calendar-legend i {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.legend-free {
+  background: white;
+  border: 1px solid #e5e7eb;
+}
+
+.legend-busy {
+  background: #fee2e2;
+}
+
+.legend-selected {
+  background: #111827;
+}
+
+.selected-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.selected-dates div {
+  background: white;
+  border-radius: 16px;
+  padding: 10px;
+}
+
+.selected-dates span {
+  color: #6b7280;
+  font-size: 12px;
+  display: block;
+}
+
+.selected-dates b {
+  font-size: 14px;
+}
+
+.clear-dates-btn {
+  width: 100%;
+  margin-top: 10px;
+  background: #eef2ff;
+  color: #111827;
+}
