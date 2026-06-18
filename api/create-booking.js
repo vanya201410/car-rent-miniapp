@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { escapeHtml, telegramApi, getBody } from './_utils.js';
+import { escapeHtml, telegramApi, getBody, findConfirmedOverlap } from './_utils.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -35,6 +35,19 @@ export default async function handler(req, res) {
 
     if (carError) {
       return res.status(400).json({ error: 'Car not found: ' + carError.message });
+    }
+
+    const overlap = await findConfirmedOverlap(
+      supabase,
+      payload.car_id,
+      payload.start_date,
+      payload.end_date
+    );
+
+    if (overlap) {
+      return res.status(409).json({
+        error: `Эта машина уже занята на выбранные даты. Занятая бронь: ${overlap.start_date} — ${overlap.end_date}.`
+      });
     }
 
     const { data: booking, error: bookingError } = await supabase

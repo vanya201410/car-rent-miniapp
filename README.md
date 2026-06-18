@@ -1,40 +1,39 @@
-# Car Rent Telegram Mini App — v3 admin buttons
+# Car Rent Telegram Mini App — v4 availability + photos
 
 Эта версия:
-- показывает машины из Supabase;
-- отправляет заявки в Supabase;
-- отправляет админу Telegram-уведомление;
-- добавляет кнопки ✅ Подтвердить и ❌ Отклонить;
-- меняет статус заявки в Supabase;
-- отправляет клиенту сообщение о подтверждении/отклонении, если Telegram позволяет боту написать клиенту.
+- показывает фото автомобиля из поля `cars.image_url`;
+- не даёт клиенту отправить заявку, если автомобиль уже подтверждён на эти даты;
+- не даёт админу подтвердить заявку, если на эти даты уже есть подтверждённая бронь;
+- сохраняет старую логику Telegram-уведомлений и кнопок.
 
-## Переменные Vercel
+## SQL для Supabase
 
-Frontend:
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-
-Serverless API:
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ADMIN_CHAT_ID`
-
-## Нужно добавить поля в Supabase
-
-В SQL Editor выполнить:
+Выполнить в Supabase → SQL Editor:
 
 ```sql
+alter table public.cars
+add column if not exists image_url text;
+
 alter table public.bookings
 add column if not exists telegram_user_id text,
 add column if not exists telegram_username text;
+
+create index if not exists bookings_car_status_dates_idx
+on public.bookings (car_id, status, start_date, end_date);
 ```
 
-## Нужно подключить webhook Telegram
+## Как работает проверка дат
 
-После деплоя открыть в браузере:
+Если есть подтверждённая бронь:
 
-https://api.telegram.org/botBOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN.vercel.app/api/telegram-webhook
+- start_date = 2026-06-18
+- end_date = 2026-06-26
 
-Заменить:
-- `BOT_TOKEN` на токен бота
-- `YOUR_DOMAIN` на домен Vercel
+то новая заявка на 2026-06-20 — 2026-06-24 будет заблокирована.
+
+Заявка на 2026-06-26 — 2026-06-28 будет разрешена, потому что `end_date` считается датой возврата.
+
+## Фото
+
+В таблице `cars` появится поле `image_url`.
+Туда нужно вставить публичную ссылку на фото автомобиля.

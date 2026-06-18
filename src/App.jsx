@@ -22,6 +22,18 @@ function daysBetween(start, end) {
   return diff > 0 ? diff : 0;
 }
 
+function CarImage({ car, className = '' }) {
+  if (car?.image_url) {
+    return <img className={className} src={car.image_url} alt={`${car.brand} ${car.model}`} />;
+  }
+
+  return (
+    <div className={`image-placeholder ${className}`}>
+      <Car size={36} />
+    </div>
+  );
+}
+
 function App() {
   const [cars, setCars] = useState([]);
   const [selectedCar, setSelectedCar] = useState(null);
@@ -126,7 +138,7 @@ function App() {
       const tg = window.Telegram?.WebApp;
       tg?.HapticFeedback?.notificationOccurred?.('success');
     } catch (error) {
-      alert('Ошибка отправки заявки: ' + error.message);
+      alert(error.message);
     } finally {
       setSending(false);
     }
@@ -154,8 +166,11 @@ function App() {
       <main className="app">
         <button className="back-btn" onClick={() => setSelectedCar(null)}>← Назад</button>
 
+        <section className="details-photo-wrap">
+          <CarImage car={selectedCar} className="details-photo" />
+        </section>
+
         <section className="hero car-hero">
-          <div className="car-icon-big"><Car size={42} /></div>
           <h1>{selectedCar.brand} {selectedCar.model}</h1>
           <p>{selectedCar.year} · {selectedCar.city}</p>
         </section>
@@ -193,6 +208,10 @@ function App() {
               <span>Итого: {totalPrice || 0} €</span>
             </div>
           </div>
+
+          <p className="hint">
+            Если автомобиль уже подтверждён на выбранные даты, заявка не отправится.
+          </p>
         </section>
 
         <section className="card">
@@ -254,9 +273,7 @@ function App() {
       <section className="cars-list">
         {cars.map((car) => (
           <article className="car-card" key={car.id} onClick={() => setSelectedCar(car)}>
-            <div className="car-thumb">
-              <Car size={34} />
-            </div>
+            <CarImage car={car} className="car-thumb" />
             <div>
               <h2>{car.brand} {car.model}</h2>
               <p>{car.year} · {car.transmission} · {car.fuel_type}</p>

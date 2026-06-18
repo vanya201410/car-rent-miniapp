@@ -38,3 +38,26 @@ export function getBody(req) {
   }
   return req.body;
 }
+
+export async function findConfirmedOverlap(supabase, carId, startDate, endDate, excludeBookingId = null) {
+  let query = supabase
+    .from('bookings')
+    .select('id, start_date, end_date, status')
+    .eq('car_id', carId)
+    .eq('status', 'confirmed')
+    .lt('start_date', endDate)
+    .gt('end_date', startDate)
+    .limit(1);
+
+  if (excludeBookingId) {
+    query = query.neq('id', excludeBookingId);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw error;
+  }
+
+  return data && data.length > 0 ? data[0] : null;
+}

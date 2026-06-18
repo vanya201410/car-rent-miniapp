@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { escapeHtml, telegramApi, getBody } from './_utils.js';
+import { escapeHtml, telegramApi, getBody, findConfirmedOverlap } from './_utils.js';
 
 function bookingStatusText(status) {
   if (status === 'confirmed') return 'подтверждена ✅';
@@ -73,6 +73,26 @@ export default async function handler(req, res) {
       .select('*')
       .eq('id', booking.car_id)
       .single();
+
+    if (newStatus === 'confirmed') {
+      const overlap = await findConfirmedOverlap(
+        supabase,
+        booking.car_id,
+        booking.start_date,
+        booking.end_date,
+        booking.id
+      );
+
+      if (overlap) {
+        await telegramApi(botToken, 'answerCallbackQuery', {
+          callback_query_id: callback.id,
+          text: `Нельзя подтвердить: авто уже занято ${overlap.start_date} — ${overlap.end_date}`,
+          show_alert: true
+        });
+
+        return res.status(200).json({ ok: true });
+      }
+    }
 
     const { error: updateError } = await supabase
       .from('bookings')
