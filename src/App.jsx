@@ -96,6 +96,8 @@ function App() {
     setSending(true);
 
     try {
+      const tgUser = getTelegramUser();
+
       const response = await fetch('/api/create-booking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -107,7 +109,9 @@ function App() {
           end_date: form.end_date,
           days_count: daysCount,
           total_price: totalPrice,
-          comment: form.comment || ''
+          comment: form.comment || '',
+          telegram_user_id: tgUser?.id ? String(tgUser.id) : null,
+          telegram_username: tgUser?.username || null
         })
       });
 

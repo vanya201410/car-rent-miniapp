@@ -1,11 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-
-function escapeHtml(value = '') {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
-}
+import { escapeHtml, telegramApi, getBody } from './_utils.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -22,7 +16,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Supabase server variables are missing.' });
     }
 
-    const payload = req.body || {};
+    const payload = getBody(req);
 
     const requiredFields = ['car_id', 'customer_name', 'phone', 'start_date', 'end_date', 'days_count', 'total_price'];
     for (const field of requiredFields) {
@@ -54,7 +48,9 @@ export default async function handler(req, res) {
         days_count: payload.days_count,
         total_price: payload.total_price,
         status: 'new',
-        comment: payload.comment || ''
+        comment: payload.comment || '',
+        telegram_user_id: payload.telegram_user_id ? String(payload.telegram_user_id) : null,
+        telegram_username: payload.telegram_username || null
       })
       .select()
       .single();
@@ -75,25 +71,26 @@ export default async function handler(req, res) {
         '',
         `<b>Клиент:</b> ${escapeHtml(payload.customer_name)}`,
         `<b>Телефон:</b> ${escapeHtml(payload.phone)}`,
+        payload.telegram_username ? `<b>Telegram:</b> @${escapeHtml(payload.telegram_username)}` : '',
         payload.comment ? `<b>Комментарий:</b> ${escapeHtml(payload.comment)}` : '',
         '',
-        `<b>ID заявки:</b> ${booking.id}`
+        `<b>ID заявки:</b> ${booking.id}`,
+        `<b>Статус:</b> новая`
       ].filter(Boolean).join('\n');
 
-      const telegramResponse = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: adminChatId,
-          text,
-          parse_mode: 'HTML'
-        })
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: adminChatId,
+        text,
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Подтвердить', callback_data: `confirm_booking:${booking.id}` },
+              { text: '❌ Отклонить', callback_data: `decline_booking:${booking.id}` }
+            ]
+          ]
+        }
       });
-
-      if (!telegramResponse.ok) {
-        const tgError = await telegramResponse.text();
-        console.error('Telegram sendMessage error:', tgError);
-      }
     }
 
     return res.status(200).json({ ok: true, booking });
