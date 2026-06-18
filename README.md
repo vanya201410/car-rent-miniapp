@@ -1,10 +1,11 @@
-# Car Rent Telegram Mini App — v4 availability + photos
+# Car Rent Telegram Mini App — v5 gallery
 
 Эта версия:
-- показывает фото автомобиля из поля `cars.image_url`;
-- не даёт клиенту отправить заявку, если автомобиль уже подтверждён на эти даты;
-- не даёт админу подтвердить заявку, если на эти даты уже есть подтверждённая бронь;
-- сохраняет старую логику Telegram-уведомлений и кнопок.
+- добавляет галерею фото;
+- клиент может листать фото кнопками, точками и свайпом;
+- фото берутся из таблицы `car_photos`;
+- старое поле `cars.image_url` работает как запасное главное фото;
+- защита от двойной брони сохраняется.
 
 ## SQL для Supabase
 
@@ -20,20 +21,36 @@ add column if not exists telegram_username text;
 
 create index if not exists bookings_car_status_dates_idx
 on public.bookings (car_id, status, start_date, end_date);
+
+create table if not exists public.car_photos (
+  id bigserial primary key,
+  car_id int8 not null references public.cars(id) on delete cascade,
+  image_url text not null,
+  sort_order int4 default 1,
+  created_at timestamptz default now()
+);
+
+alter table public.car_photos enable row level security;
+
+drop policy if exists "Public can read car photos" on public.car_photos;
+
+create policy "Public can read car photos"
+on public.car_photos
+for select
+to anon
+using (true);
+
+create index if not exists car_photos_car_sort_idx
+on public.car_photos (car_id, sort_order);
 ```
 
-## Как работает проверка дат
+## Как добавить фото
 
-Если есть подтверждённая бронь:
-
-- start_date = 2026-06-18
-- end_date = 2026-06-26
-
-то новая заявка на 2026-06-20 — 2026-06-24 будет заблокирована.
-
-Заявка на 2026-06-26 — 2026-06-28 будет разрешена, потому что `end_date` считается датой возврата.
-
-## Фото
-
-В таблице `cars` появится поле `image_url`.
-Туда нужно вставить публичную ссылку на фото автомобиля.
+1. Supabase → Storage → `car-photos`
+2. Upload фото
+3. Copy public URL
+4. Supabase → Table Editor → `car_photos`
+5. Insert row:
+   - `car_id`: id машины, например `1`
+   - `image_url`: ссылка на фото
+   - `sort_order`: порядок фото, например `1`, `2`, `3`

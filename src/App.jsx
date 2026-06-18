@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Calendar, Car, CheckCircle2, Fuel, Loader2, MapPin, Send, Users } from 'lucide-react';
+import { Calendar, Car, CheckCircle2, ChevronLeft, ChevronRight, Fuel, Loader2, MapPin, Send, Users } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -22,15 +22,125 @@ function daysBetween(start, end) {
   return diff > 0 ? diff : 0;
 }
 
+function getCarPhotos(car) {
+  const fromTable = Array.isArray(car?.car_photos)
+    ? [...car.car_photos]
+        .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+        .map((photo) => photo.image_url)
+        .filter(Boolean)
+    : [];
+
+  if (fromTable.length > 0) return fromTable;
+  if (car?.image_url) return [car.image_url];
+  return [];
+}
+
 function CarImage({ car, className = '' }) {
-  if (car?.image_url) {
-    return <img className={className} src={car.image_url} alt={`${car.brand} ${car.model}`} />;
+  const photos = getCarPhotos(car);
+
+  if (photos[0]) {
+    return <img className={className} src={photos[0]} alt={`${car.brand} ${car.model}`} />;
   }
 
   return (
     <div className={`image-placeholder ${className}`}>
       <Car size={36} />
     </div>
+  );
+}
+
+function PhotoGallery({ car }) {
+  const photos = getCarPhotos(car);
+  const [index, setIndex] = useState(0);
+  const [touchStartX, setTouchStartX] = useState(null);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [car?.id]);
+
+  if (photos.length === 0) {
+    return (
+      <section className="details-photo-wrap">
+        <div className="image-placeholder details-photo"><Car size={42} /></div>
+      </section>
+    );
+  }
+
+  const currentPhoto = photos[index];
+
+  function goPrev() {
+    setIndex((prev) => (prev === 0 ? photos.length - 1 : prev - 1));
+  }
+
+  function goNext() {
+    setIndex((prev) => (prev === photos.length - 1 ? 0 : prev + 1));
+  }
+
+  function handleTouchEnd(event) {
+    if (touchStartX === null) return;
+
+    const touchEndX = event.changedTouches[0].clientX;
+    const diff = touchStartX - touchEndX;
+
+    if (Math.abs(diff) > 45) {
+      if (diff > 0) goNext();
+      else goPrev();
+    }
+
+    setTouchStartX(null);
+  }
+
+  return (
+    <section className="gallery">
+      <div
+        className="gallery-main"
+        onTouchStart={(event) => setTouchStartX(event.touches[0].clientX)}
+        onTouchEnd={handleTouchEnd}
+      >
+        <img className="details-photo" src={currentPhoto} alt={`${car.brand} ${car.model} фото ${index + 1}`} />
+
+        {photos.length > 1 && (
+          <>
+            <button className="gallery-arrow left" onClick={goPrev} aria-label="Предыдущее фото">
+              <ChevronLeft size={20} />
+            </button>
+            <button className="gallery-arrow right" onClick={goNext} aria-label="Следующее фото">
+              <ChevronRight size={20} />
+            </button>
+            <div className="gallery-counter">
+              {index + 1} / {photos.length}
+            </div>
+          </>
+        )}
+      </div>
+
+      {photos.length > 1 && (
+        <>
+          <div className="gallery-dots">
+            {photos.map((_, photoIndex) => (
+              <button
+                key={photoIndex}
+                className={photoIndex === index ? 'dot active' : 'dot'}
+                onClick={() => setIndex(photoIndex)}
+                aria-label={`Фото ${photoIndex + 1}`}
+              />
+            ))}
+          </div>
+
+          <div className="gallery-thumbs">
+            {photos.map((photo, photoIndex) => (
+              <button
+                key={photoIndex}
+                className={photoIndex === index ? 'thumb active' : 'thumb'}
+                onClick={() => setIndex(photoIndex)}
+              >
+                <img src={photo} alt={`Миниатюра ${photoIndex + 1}`} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -75,7 +185,7 @@ function App() {
 
     const { data, error } = await supabase
       .from('cars')
-      .select('*')
+      .select('*, car_photos(id, image_url, sort_order)')
       .eq('is_active', true)
       .order('id', { ascending: true });
 
@@ -166,9 +276,7 @@ function App() {
       <main className="app">
         <button className="back-btn" onClick={() => setSelectedCar(null)}>← Назад</button>
 
-        <section className="details-photo-wrap">
-          <CarImage car={selectedCar} className="details-photo" />
-        </section>
+        <PhotoGallery car={selectedCar} />
 
         <section className="hero car-hero">
           <h1>{selectedCar.brand} {selectedCar.model}</h1>
@@ -259,7 +367,7 @@ function App() {
         <section className="error-card">
           <b>Ошибка подключения</b>
           <p>{loadError}</p>
-          <p>Проверь переменные окружения Supabase и доступ к таблице cars.</p>
+          <p>Проверь переменные окружения Supabase и доступ к таблице cars/car_photos.</p>
         </section>
       )}
 
