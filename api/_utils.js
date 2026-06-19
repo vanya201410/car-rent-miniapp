@@ -101,9 +101,26 @@ export function bookingStatusText(status) {
   return status;
 }
 
+const EXTRA_SERVICE_LABELS = {
+  delivery_barcelona: '🚗 Доставка по Барселоне',
+  delivery_airport: '✈️ Доставка в аэропорт BCN',
+  child_seat: '👶 Детское кресло',
+  additional_driver: '👤 Дополнительный водитель',
+  night_service: '🌙 Ночная выдача/возврат',
+  return_other_place: '📍 Возврат в другом месте',
+  extra_km_100: '🛣 Пакет +100 км',
+  extra_km_300: '🛣 Пакет +300 км',
+  no_wash_return: '🧽 Возврат без мойки',
+  cross_border: '🌍 Выезд за пределы Испании'
+};
+
+function extraServiceLabel(code) {
+  return EXTRA_SERVICE_LABELS[code] || code;
+}
+
 export function buildAdminBookingText({ title, booking, car }) {
   const extras = booking.extras && typeof booking.extras === 'object'
-    ? Object.entries(booking.extras).filter(([, value]) => Boolean(value)).map(([key]) => key)
+    ? Object.entries(booking.extras).filter(([, value]) => Boolean(value)).map(([key]) => extraServiceLabel(key))
     : [];
 
   return [

@@ -1,6 +1,87 @@
 import { createClient } from '@supabase/supabase-js';
 import { escapeHtml, telegramApi, getBody, findUnavailableOverlap } from './_utils.js';
 
+const FALLBACK_EXTRA_SERVICES = [
+  { code: 'delivery_barcelona', name: '🚗 Доставка по Барселоне', price: 30, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 1 },
+  { code: 'delivery_airport', name: '✈️ Доставка в аэропорт BCN', price: 40, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 2 },
+  { code: 'child_seat', name: '👶 Детское кресло', price: 25, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 3 },
+  { code: 'additional_driver', name: '👤 Дополнительный водитель', price: 10, price_type: 'per_day_capped', max_price: 50, extra_km: 0, is_active: true, sort_order: 4 },
+  { code: 'night_service', name: '🌙 Ночная выдача/возврат', price: 30, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 5 },
+  { code: 'return_other_place', name: '📍 Возврат в другом месте', price: 50, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 6 },
+  { code: 'extra_km_100', name: '🛣 Пакет +100 км', price: 20, price_type: 'fixed', max_price: null, extra_km: 100, is_active: true, sort_order: 7 },
+  { code: 'extra_km_300', name: '🛣 Пакет +300 км', price: 50, price_type: 'fixed', max_price: null, extra_km: 300, is_active: true, sort_order: 8 },
+  { code: 'no_wash_return', name: '🧽 Возврат без мойки', price: 20, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 9 },
+  { code: 'cross_border', name: '🌍 Выезд за пределы Испании', price: 0, price_type: 'request', max_price: null, extra_km: 0, is_active: true, sort_order: 10 }
+];
+
+function unique(array) {
+  return [...new Set((array || []).filter(Boolean).map(String))];
+}
+
+function normalizeSelectedCodes(payload) {
+  const fromArray = Array.isArray(payload.selected_extra_service_codes)
+    ? payload.selected_extra_service_codes
+    : [];
+
+  const fromExtrasObject = payload.extras && typeof payload.extras === 'object'
+    ? Object.entries(payload.extras).filter(([, value]) => Boolean(value)).map(([key]) => key)
+    : [];
+
+  let codes = unique([...fromArray, ...fromExtrasObject]);
+
+  // Защита: только одна доставка.
+  if (codes.includes('delivery_airport')) {
+    codes = codes.filter((code) => code !== 'delivery_barcelona');
+  }
+
+  // Защита: только один пакет километров.
+  if (codes.includes('extra_km_300')) {
+    codes = codes.filter((code) => code !== 'extra_km_100');
+  }
+
+  return codes;
+}
+
+function calculateExtraServiceTotal(service, daysCount) {
+  if (!service) return 0;
+  if (service.price_type === 'request') return 0;
+
+  const price = Number(service.price || 0);
+
+  if (service.price_type === 'per_day_capped') {
+    const days = Math.max(Number(daysCount || 1), 1);
+    const rawTotal = days * price;
+    const maxPrice = service.max_price === null || service.max_price === undefined ? null : Number(service.max_price);
+    return maxPrice ? Math.min(rawTotal, maxPrice) : rawTotal;
+  }
+
+  return price;
+}
+
+async function loadExtraServices(supabase, selectedCodes) {
+  if (!selectedCodes.length) return [];
+
+  const { data, error } = await supabase
+    .from('extra_services')
+    .select('*')
+    .in('code', selectedCodes)
+    .eq('is_active', true);
+
+  if (error) {
+    console.warn('Не удалось загрузить extra_services, используем резервный список:', error.message);
+    return FALLBACK_EXTRA_SERVICES.filter((service) => selectedCodes.includes(service.code));
+  }
+
+  return data || [];
+}
+
+function buildExtrasObject(selectedServices) {
+  return selectedServices.reduce((acc, service) => {
+    acc[service.code] = true;
+    return acc;
+  }, {});
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -51,7 +132,35 @@ export default async function handler(req, res) {
       });
     }
 
-    const extras = payload.extras && typeof payload.extras === 'object' ? payload.extras : {};
+    const selectedCodes = normalizeSelectedCodes(payload);
+    const servicesFromDb = await loadExtraServices(supabase, selectedCodes);
+    const servicesByCode = Object.fromEntries((servicesFromDb || []).map((service) => [service.code, service]));
+
+    const selectedServices = selectedCodes
+      .map((code) => servicesByCode[code])
+      .filter(Boolean)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+
+    const serviceRows = selectedServices.map((service) => {
+      const quantity = service.price_type === 'per_day_capped' ? Math.max(Number(payload.days_count || 1), 1) : 1;
+      const total = calculateExtraServiceTotal(service, payload.days_count);
+
+      return {
+        service,
+        row: {
+          service_code: service.code,
+          service_name: service.name || service.label || service.code,
+          price: Number(service.price || 0),
+          quantity,
+          total
+        }
+      };
+    });
+
+    const extrasTotal = serviceRows.reduce((sum, item) => sum + Number(item.row.total || 0), 0);
+    const basePrice = Number(payload.base_price || 0);
+    const totalPrice = basePrice + extrasTotal;
+    const extras = buildExtrasObject(selectedServices);
 
     const { data: booking, error: bookingError } = await supabase
       .from('bookings')
@@ -62,13 +171,13 @@ export default async function handler(req, res) {
         start_date: payload.start_date,
         end_date: payload.end_date,
         days_count: payload.days_count,
-        base_price: payload.base_price || 0,
+        base_price: basePrice,
         discount_percent: payload.discount_percent || 0,
         discount_amount: payload.discount_amount || 0,
         discount_label: payload.discount_label || null,
-        extras_total: payload.extras_total || 0,
+        extras_total: extrasTotal,
         extras,
-        total_price: payload.total_price,
+        total_price: totalPrice,
         status: 'new',
         comment: payload.comment || '',
         telegram_user_id: payload.telegram_user_id ? String(payload.telegram_user_id) : null,
@@ -81,8 +190,32 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: bookingError.message });
     }
 
+    if (serviceRows.length) {
+      const bookingExtraRows = serviceRows.map(({ service, row }) => ({
+        booking_id: booking.id,
+        service_id: service.id,
+        service_code: row.service_code,
+        service_name: row.service_name,
+        price: row.price,
+        quantity: row.quantity,
+        total: row.total
+      }));
+
+      const { error: bookingExtrasError } = await supabase
+        .from('booking_extra_services')
+        .insert(bookingExtraRows);
+
+      if (bookingExtrasError) {
+        console.error('booking_extra_services insert error:', bookingExtrasError.message);
+      }
+    }
+
     if (botToken && adminChatId) {
-      const selectedExtras = Object.entries(extras).filter(([, value]) => Boolean(value)).map(([key]) => key);
+      const servicesText = serviceRows
+        .map(({ row }) => `${row.service_name} — ${row.total} €`)
+        .join('\n');
+
+      const includedKm = Number(payload.included_km || (Number(payload.days_count || 0) * 200));
 
       const text = [
         '🚗 <b>Новая заявка на аренду</b>',
@@ -90,12 +223,13 @@ export default async function handler(req, res) {
         `<b>Авто:</b> ${escapeHtml(car.brand)} ${escapeHtml(car.model)}`,
         `<b>Даты:</b> ${escapeHtml(payload.start_date)} — ${escapeHtml(payload.end_date)}`,
         `<b>Дней:</b> ${escapeHtml(payload.days_count)}`,
-        payload.base_price ? `<b>Аренда:</b> ${escapeHtml(payload.base_price)} €` : '',
+        basePrice ? `<b>Аренда:</b> ${escapeHtml(basePrice)} €` : '',
         payload.discount_amount ? `<b>Скидка:</b> −${escapeHtml(payload.discount_amount)} €${payload.discount_label ? ' · ' + escapeHtml(payload.discount_label) : ''}` : '',
-        payload.extras_total ? `<b>Доп. услуги:</b> ${escapeHtml(payload.extras_total)} €` : '',
-        `<b>Сумма:</b> ${escapeHtml(payload.total_price)} €`,
+        extrasTotal ? `<b>Доп. услуги:</b> ${escapeHtml(extrasTotal)} €` : '',
+        servicesText ? `<b>Выбрано:</b>\n${escapeHtml(servicesText)}` : '',
+        includedKm ? `<b>Включено км:</b> ${escapeHtml(includedKm)} км` : '',
+        `<b>Сумма:</b> ${escapeHtml(totalPrice)} €`,
         car.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',
-        selectedExtras.length ? `<b>Услуги:</b> ${escapeHtml(selectedExtras.join(', '))}` : '',
         '',
         `<b>Клиент:</b> ${escapeHtml(payload.customer_name)}`,
         `<b>Телефон:</b> ${escapeHtml(payload.phone)}`,

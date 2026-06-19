@@ -615,3 +615,12 @@ button {
 .discount-rules-box b {
   margin-bottom: 2px;
 }
+
+.extra-item small {
+  display: block;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-top: 3px;
+}

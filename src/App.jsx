@@ -9,15 +9,73 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
 
-const EXTRA_SERVICES = [
-  { id: 'delivery', label: 'Доставка автомобиля', price: 30 },
-  { id: 'child_seat', label: 'Детское кресло', price: 20 },
-  { id: 'extra_driver', label: 'Дополнительный водитель', price: 25 },
-  { id: 'full_insurance', label: 'Расширенная страховка', price: 40 },
-  { id: 'other_return', label: 'Возврат в другом месте', price: 50 }
+const DEFAULT_EXTRA_SERVICES = [
+  { code: 'delivery_barcelona', id: 'delivery_barcelona', name: '🚗 Доставка по Барселоне', label: '🚗 Доставка по Барселоне', description: 'Доставка автомобиля в пределах Барселоны', price: 30, price_type: 'fixed', sort_order: 1 },
+  { code: 'delivery_airport', id: 'delivery_airport', name: '✈️ Доставка в аэропорт BCN', label: '✈️ Доставка в аэропорт BCN', description: 'Доставка автомобиля в аэропорт Barcelona-El Prat', price: 40, price_type: 'fixed', sort_order: 2 },
+  { code: 'child_seat', id: 'child_seat', name: '👶 Детское кресло', label: '👶 Детское кресло', description: 'Детское кресло на весь срок аренды', price: 25, price_type: 'fixed', sort_order: 3 },
+  { code: 'additional_driver', id: 'additional_driver', name: '👤 Дополнительный водитель', label: '👤 Дополнительный водитель', description: '10 €/день, максимум 50 €. Требуются документы и права второго водителя.', price: 10, price_type: 'per_day_capped', max_price: 50, sort_order: 4 },
+  { code: 'night_service', id: 'night_service', name: '🌙 Ночная выдача/возврат', label: '🌙 Ночная выдача/возврат', description: 'Выдача или возврат с 22:00 до 08:00', price: 30, price_type: 'fixed', sort_order: 5 },
+  { code: 'return_other_place', id: 'return_other_place', name: '📍 Возврат в другом месте', label: '📍 Возврат в другом месте', description: 'В пределах Барселоны. За пределами города — по согласованию.', price: 50, price_type: 'fixed', sort_order: 6 },
+  { code: 'extra_km_100', id: 'extra_km_100', name: '🛣 Пакет +100 км', label: '🛣 Пакет +100 км', description: 'Дополнительные 100 км к лимиту пробега', price: 20, price_type: 'fixed', extra_km: 100, sort_order: 7 },
+  { code: 'extra_km_300', id: 'extra_km_300', name: '🛣 Пакет +300 км', label: '🛣 Пакет +300 км', description: 'Дополнительные 300 км к лимиту пробега', price: 50, price_type: 'fixed', extra_km: 300, sort_order: 8 },
+  { code: 'no_wash_return', id: 'no_wash_return', name: '🧽 Возврат без мойки', label: '🧽 Возврат без мойки', description: 'Можно вернуть автомобиль без обычной мойки. Сильное загрязнение оплачивается отдельно.', price: 20, price_type: 'fixed', sort_order: 9 },
+  { code: 'cross_border', id: 'cross_border', name: '🌍 Выезд за пределы Испании', label: '🌍 Выезд за пределы Испании', description: 'Только по согласованию с менеджером', price: 0, price_type: 'request', sort_order: 10 }
 ];
 
-function calculatePrice(pricePerDay, daysCount, extras, discountRules = []) {
+function normalizeExtraService(service) {
+  const code = service.code || service.id;
+  return {
+    ...service,
+    id: code,
+    code,
+    label: service.name || service.label || code,
+    name: service.name || service.label || code,
+    price: Number(service.price || 0),
+    max_price: service.max_price === null || service.max_price === undefined ? null : Number(service.max_price),
+    price_type: service.price_type || 'fixed',
+    extra_km: Number(service.extra_km || 0),
+    sort_order: Number(service.sort_order || 0)
+  };
+}
+
+function getExtraServicePrice(service, daysCount) {
+  if (!service) return 0;
+
+  if (service.price_type === 'request') return 0;
+
+  if (service.price_type === 'per_day_capped') {
+    const days = Math.max(Number(daysCount || 1), 1);
+    const rawTotal = days * Number(service.price || 0);
+    return service.max_price ? Math.min(rawTotal, Number(service.max_price)) : rawTotal;
+  }
+
+  return Number(service.price || 0);
+}
+
+function getExtraServicePriceText(service, daysCount) {
+  if (!service) return '';
+  if (service.price_type === 'request') return 'по запросу';
+  return `+${getExtraServicePrice(service, daysCount)} €`;
+}
+
+function getSelectedExtraCodes(extras) {
+  return Object.entries(extras || {})
+    .filter(([, value]) => Boolean(value))
+    .map(([code]) => code);
+}
+
+function calculateIncludedKm(daysCount, extras, extraServices = DEFAULT_EXTRA_SERVICES) {
+  const baseKm = Math.max(Number(daysCount || 0), 0) * 200;
+  const selectedCodes = getSelectedExtraCodes(extras);
+  const extraKm = selectedCodes.reduce((sum, code) => {
+    const service = extraServices.find((item) => item.code === code || item.id === code);
+    return sum + Number(service?.extra_km || 0);
+  }, 0);
+
+  return baseKm + extraKm;
+}
+
+function calculatePrice(pricePerDay, daysCount, extras, discountRules = [], extraServices = DEFAULT_EXTRA_SERVICES) {
   if (!daysCount || !pricePerDay) {
     return {
       originalBasePrice: 0,
@@ -41,8 +99,10 @@ function calculatePrice(pricePerDay, daysCount, extras, discountRules = []) {
   const basePrice = Math.max(0, originalBasePrice - discountAmount);
   const discountLabel = applicableRule?.label || (discountPercent ? `Скидка ${discountPercent}%` : '');
 
-  const extrasTotal = EXTRA_SERVICES.reduce((sum, service) => {
-    return extras?.[service.id] ? sum + service.price : sum;
+  const selectedCodes = getSelectedExtraCodes(extras);
+  const extrasTotal = selectedCodes.reduce((sum, code) => {
+    const service = extraServices.find((item) => item.code === code || item.id === code);
+    return sum + getExtraServicePrice(service, daysCount);
   }, 0);
 
   return {
@@ -373,6 +433,7 @@ function App() {
   const [view, setView] = useState('catalog');
   const [cars, setCars] = useState([]);
   const [discountRules, setDiscountRules] = useState([]);
+  const [extraServices, setExtraServices] = useState(DEFAULT_EXTRA_SERVICES);
   const [selectedCar, setSelectedCar] = useState(null);
   const [busyRanges, setBusyRanges] = useState([]);
   const [myBookings, setMyBookings] = useState([]);
@@ -404,6 +465,7 @@ function App() {
 
     loadCars();
     loadDiscountRules();
+    loadExtraServices();
   }, []);
 
   useEffect(() => {
@@ -449,6 +511,19 @@ function App() {
       }
     } catch (error) {
       console.warn('Не удалось загрузить правила скидок:', error);
+    }
+  }
+
+  async function loadExtraServices() {
+    try {
+      const response = await fetch('/api/extra-services');
+      const result = await response.json();
+
+      if (response.ok && Array.isArray(result.extra_services) && result.extra_services.length > 0) {
+        setExtraServices(result.extra_services.map(normalizeExtraService));
+      }
+    } catch (error) {
+      console.warn('Не удалось загрузить доп. услуги, используем стандартный список:', error);
     }
   }
 
@@ -500,16 +575,36 @@ function App() {
   }
 
   function toggleExtra(serviceId) {
-    setExtras((prev) => ({ ...prev, [serviceId]: !prev[serviceId] }));
+    setExtras((prev) => {
+      const next = { ...prev };
+
+      if (next[serviceId]) {
+        delete next[serviceId];
+        return next;
+      }
+
+      // Эти услуги взаимоисключающие: клиент выбирает только одну доставку.
+      if (serviceId === 'delivery_barcelona') delete next.delivery_airport;
+      if (serviceId === 'delivery_airport') delete next.delivery_barcelona;
+
+      // Клиент выбирает только один пакет дополнительных километров.
+      if (serviceId === 'extra_km_100') delete next.extra_km_300;
+      if (serviceId === 'extra_km_300') delete next.extra_km_100;
+
+      next[serviceId] = true;
+      return next;
+    });
   }
 
   const daysCount = useMemo(() => daysBetween(form.start_date, form.end_date), [form.start_date, form.end_date]);
   const priceBreakdown = useMemo(() => {
     if (!selectedCar) return { originalBasePrice: 0, basePrice: 0, discountAmount: 0, discountPercent: 0, discountLabel: '', extrasTotal: 0, totalPrice: 0 };
-    return calculatePrice(selectedCar.price_per_day, daysCount, extras, discountRules);
-  }, [selectedCar, daysCount, extras, discountRules]);
+    return calculatePrice(selectedCar.price_per_day, daysCount, extras, discountRules, extraServices);
+  }, [selectedCar, daysCount, extras, discountRules, extraServices]);
 
   const totalPrice = priceBreakdown.totalPrice;
+  const includedKm = useMemo(() => calculateIncludedKm(daysCount, extras, extraServices), [daysCount, extras, extraServices]);
+  const selectedExtraCodes = useMemo(() => getSelectedExtraCodes(extras), [extras]);
 
   function updateForm(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -546,6 +641,8 @@ function App() {
           discount_label: priceBreakdown.discountLabel,
           extras_total: priceBreakdown.extrasTotal,
           extras,
+          selected_extra_service_codes: selectedExtraCodes,
+          included_km: includedKm,
           total_price: totalPrice,
           comment: form.comment || '',
           telegram_user_id: tgUser?.id ? String(tgUser.id) : null,
@@ -680,6 +777,7 @@ function App() {
               {priceBreakdown.discountAmount > 0 && <span>Без скидки: {priceBreakdown.originalBasePrice} €</span>}
               {priceBreakdown.discountAmount > 0 && <span>Скидка: −{priceBreakdown.discountAmount} € · {priceBreakdown.discountLabel}</span>}
               {priceBreakdown.extrasTotal > 0 && <span>Доп. услуги: {priceBreakdown.extrasTotal} €</span>}
+              <span>Включено: {includedKm || 0} км</span>
               <span>Итого: {totalPrice || 0} €</span>
             </div>
           </div>
@@ -703,15 +801,18 @@ function App() {
         <section className="card">
           <h2>Дополнительные услуги</h2>
           <div className="extras-list">
-            {EXTRA_SERVICES.map((service) => (
-              <label className="extra-item" key={service.id}>
+            {extraServices.map((service) => (
+              <label className="extra-item" key={service.code}>
                 <input
                   type="checkbox"
-                  checked={Boolean(extras[service.id])}
-                  onChange={() => toggleExtra(service.id)}
+                  checked={Boolean(extras[service.code])}
+                  onChange={() => toggleExtra(service.code)}
                 />
-                <span>{service.label}</span>
-                <b>+{service.price} €</b>
+                <span>
+                  {service.label}
+                  {service.description && <small>{service.description}</small>}
+                </span>
+                <b>{getExtraServicePriceText(service, daysCount)}</b>
               </label>
             ))}
           </div>
