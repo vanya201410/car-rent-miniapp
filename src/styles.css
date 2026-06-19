@@ -598,3 +598,20 @@ button {
   margin: 8px 0 0;
   color: #6b7280;
 }
+
+
+.discount-rules-box {
+  display: grid;
+  gap: 4px;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  color: #065f46;
+  border-radius: 16px;
+  padding: 12px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.discount-rules-box b {
+  margin-bottom: 2px;
+}

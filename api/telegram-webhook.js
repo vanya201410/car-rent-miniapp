@@ -47,6 +47,9 @@ function adminMenuMarkup() {
       ],
       [
         { text: '🚗 Машины', callback_data: 'admin_cars' },
+        { text: '💸 Скидки', callback_data: 'admin_discounts' }
+      ],
+      [
         { text: '🚫 Блокировки дат', callback_data: 'admin_blocks' }
       ],
       [
@@ -68,6 +71,7 @@ async function sendAdminMenu(botToken, chatId, editTarget = null) {
     'Быстрые команды:',
     '<code>/block 1 2026-07-01 2026-07-03 сервис</code>',
     '<code>/price 1 90</code>',
+    '<code>/discount 7 10 Скидка 10% от 7 дней</code>',
     '<code>/hidecar 1</code>',
     '<code>/showcar 1</code>'
   ].join('\n');
@@ -602,6 +606,41 @@ async function renderBlocksList({ supabase, botToken, chatId, messageId }) {
   });
 }
 
+
+async function renderDiscountsList({ supabase, botToken, chatId, messageId }) {
+  const { data: rules, error } = await supabase
+    .from('discount_rules')
+    .select('*')
+    .order('min_days', { ascending: true });
+
+  const text = error
+    ? 'Ошибка загрузки скидок: ' + escapeHtml(error.message)
+    : [
+        '💸 <b>Скидки по сроку аренды</b>',
+        '',
+        ...(rules || []).map((rule) => [
+          `#${rule.id} — от ${escapeHtml(rule.min_days)} дней`,
+          `Скидка: ${escapeHtml(rule.discount_percent)}%`,
+          `Статус: ${rule.is_active ? 'активна' : 'выключена'}`,
+          rule.label ? `Текст: ${escapeHtml(rule.label)}` : '',
+          `Выключить: /discountoff ${rule.id}`,
+          `Включить: /discounton ${rule.id}`
+        ].filter(Boolean).join('\n')),
+        '',
+        '<b>Добавить / обновить правило:</b>',
+        '<code>/discount 7 10 Скидка 10% от 7 дней</code>',
+        '<code>/discount 14 15 Скидка 15% от 14 дней</code>'
+      ].join('\n\n');
+
+  return telegramApi(botToken, 'editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text: text || 'Скидок пока нет.',
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ Назад', callback_data: 'admin_menu' }]] }
+  });
+}
+
 async function handleAdminCommand({ text, supabase, botToken, chatId }) {
   const parts = text.trim().split(/\s+/);
   const command = parts[0];
@@ -621,6 +660,72 @@ async function handleAdminCommand({ text, supabase, botToken, chatId }) {
     await telegramApi(botToken, 'sendMessage', {
       chat_id: chatId,
       text: 'Текущий процесс отменён.'
+    });
+    return true;
+  }
+
+
+  if (command === '/discount') {
+    const [, minDaysRaw, percentRaw, ...labelParts] = parts;
+    const minDays = parseInt(minDaysRaw, 10);
+    const discountPercent = Number(String(percentRaw || '').replace(',', '.'));
+    const label = labelParts.join(' ') || `Скидка ${discountPercent}% от ${minDays} дней`;
+
+    if (!minDays || !Number.isFinite(discountPercent)) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Формат: /discount min_days percent label\nПример: /discount 7 10 Скидка 10% от 7 дней'
+      });
+      return true;
+    }
+
+    const { data: existing } = await supabase
+      .from('discount_rules')
+      .select('id')
+      .eq('min_days', minDays)
+      .maybeSingle();
+
+    const payload = {
+      min_days: minDays,
+      discount_percent: discountPercent,
+      label,
+      is_active: true,
+      sort_order: minDays
+    };
+
+    const query = existing
+      ? supabase.from('discount_rules').update(payload).eq('id', existing.id)
+      : supabase.from('discount_rules').insert(payload);
+
+    const { error } = await query;
+
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: error ? 'Ошибка: ' + error.message : `✅ Скидка настроена: от ${minDays} дней — ${discountPercent}%`
+    });
+    return true;
+  }
+
+  if (command === '/discountoff' || command === '/discounton') {
+    const [, ruleId] = parts;
+    const isActive = command === '/discounton';
+
+    if (!ruleId) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Укажи ID скидки. Например: /discountoff 2'
+      });
+      return true;
+    }
+
+    const { error } = await supabase
+      .from('discount_rules')
+      .update({ is_active: isActive })
+      .eq('id', ruleId);
+
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: error ? 'Ошибка: ' + error.message : isActive ? `✅ Скидка #${ruleId} включена.` : `🙈 Скидка #${ruleId} выключена.`
     });
     return true;
   }
@@ -707,6 +812,9 @@ async function handleAdminCommand({ text, supabase, botToken, chatId }) {
         '/block 1 2026-07-01 2026-07-03 сервис',
         '/unblock 3',
         '/price 1 90',
+        '/discount 7 10 Скидка 10% от 7 дней',
+        '/discountoff 1',
+        '/discounton 1',
         '/hidecar 1',
         '/showcar 1',
         '/complete 5'
@@ -813,6 +921,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
+    if (callbackData === 'admin_discounts') {
+      await telegramApi(botToken, 'answerCallbackQuery', { callback_query_id: callback.id, text: 'Скидки' });
+      await renderDiscountsList({ supabase, botToken, chatId: callback.message.chat.id, messageId: callback.message.message_id });
+      return res.status(200).json({ ok: true });
+    }
+
     if (callbackData === 'admin_blocks') {
       await telegramApi(botToken, 'answerCallbackQuery', { callback_query_id: callback.id, text: 'Блокировки' });
       await renderBlocksList({ supabase, botToken, chatId: callback.message.chat.id, messageId: callback.message.message_id });
@@ -833,6 +947,9 @@ export default async function handler(req, res) {
           '<code>/block 1 2026-07-01 2026-07-03 сервис</code>',
           '<code>/unblock 3</code>',
           '<code>/price 1 90</code>',
+          '<code>/discount 7 10 Скидка 10% от 7 дней</code>',
+          '<code>/discountoff 1</code>',
+          '<code>/discounton 1</code>',
           '<code>/hidecar 1</code>',
           '<code>/showcar 1</code>',
           '<code>/complete 5</code>'

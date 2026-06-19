@@ -113,6 +113,7 @@ export function buildAdminBookingText({ title, booking, car }) {
     `<b>Даты:</b> ${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)}`,
     `<b>Дней:</b> ${escapeHtml(booking.days_count)}`,
     booking.base_price ? `<b>Аренда:</b> ${escapeHtml(booking.base_price)} €` : '',
+    booking.discount_amount ? `<b>Скидка:</b> −${escapeHtml(booking.discount_amount)} €${booking.discount_label ? ' · ' + escapeHtml(booking.discount_label) : ''}` : '',
     booking.extras_total ? `<b>Доп. услуги:</b> ${escapeHtml(booking.extras_total)} €` : '',
     `<b>Сумма:</b> ${escapeHtml(booking.total_price)} €`,
     car?.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',

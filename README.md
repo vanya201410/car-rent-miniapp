@@ -1,17 +1,19 @@
-# Car Rent Telegram Mini App — v9 add car admin
+# Car Rent Telegram Mini App — v10 discount rules
 
-Эта версия добавляет красивое добавление машин прямо из Telegram.
+Эта версия добавляет нормальную систему скидок по сроку аренды.
 
 Что добавлено:
-- кнопка ➕ Добавить машину в `/admin`;
-- пошаговый мастер добавления машины;
-- бот спрашивает марку, модель, год, цену, залог, коробку, топливо, места, город и описание;
-- после создания машины можно отправить фото прямо в Telegram;
-- фото автоматически загружаются в Supabase Storage `car-photos`;
-- фото автоматически добавляются в таблицу `car_photos`;
-- команда `/done` завершает добавление фото;
-- команда `/cancel` отменяет текущий мастер;
-- весь функционал v8 сохраняется.
+- скидки хранятся в таблице `discount_rules`;
+- приложение само загружает активные скидки из Supabase;
+- клиент видит правила скидок в карточке машины;
+- расчёт показывает цену без скидки, сумму скидки и итог;
+- в `/admin` появляется раздел 💸 Скидки;
+- команды администратора:
+  - `/discount 7 10 Скидка 10% от 7 дней`
+  - `/discount 14 15 Скидка 15% от 14 дней`
+  - `/discountoff 3`
+  - `/discounton 3`
+- весь функционал v9 сохраняется.
 
 ## SQL для Supabase
 
@@ -26,7 +28,10 @@ add column if not exists telegram_user_id text,
 add column if not exists telegram_username text,
 add column if not exists base_price numeric default 0,
 add column if not exists extras_total numeric default 0,
-add column if not exists extras jsonb default '{}'::jsonb;
+add column if not exists extras jsonb default '{}'::jsonb,
+add column if not exists discount_percent numeric default 0,
+add column if not exists discount_amount numeric default 0,
+add column if not exists discount_label text;
 
 create index if not exists bookings_car_status_dates_idx
 on public.bookings (car_id, status, start_date, end_date);
@@ -83,17 +88,59 @@ create table if not exists public.admin_sessions (
 );
 
 alter table public.admin_sessions enable row level security;
+
+create table if not exists public.discount_rules (
+  id bigserial primary key,
+  min_days int4 not null,
+  discount_percent numeric not null default 0,
+  label text,
+  is_active bool default true,
+  sort_order int4 default 1,
+  created_at timestamptz default now()
+);
+
+alter table public.discount_rules enable row level security;
+
+drop policy if exists "Public can read discount rules" on public.discount_rules;
+
+create policy "Public can read discount rules"
+on public.discount_rules
+for select
+to anon
+using (is_active = true);
+
+create index if not exists discount_rules_active_days_idx
+on public.discount_rules (is_active, min_days);
+
+insert into public.discount_rules (min_days, discount_percent, label, sort_order)
+select 7, 10, 'Скидка 10% за аренду от 7 дней', 1
+where not exists (select 1 from public.discount_rules where min_days = 7);
+
+insert into public.discount_rules (min_days, discount_percent, label, sort_order)
+select 14, 15, 'Скидка 15% за аренду от 14 дней', 2
+where not exists (select 1 from public.discount_rules where min_days = 14);
 ```
 
-## Storage
+## Как управлять скидками
 
-Нужен public bucket:
+Открой бота и напиши:
 
-- `car-photos`
+`/admin`
 
-Если его нет:
-Supabase → Storage → New bucket → `car-photos` → Public bucket.
+Нажми:
 
-## Webhook
+`💸 Скидки`
 
-Если кнопки подтверждения уже работали, webhook менять не нужно.
+Добавить или изменить правило:
+
+`/discount 7 10 Скидка 10% от 7 дней`
+
+`/discount 14 15 Скидка 15% от 14 дней`
+
+Выключить скидку:
+
+`/discountoff 1`
+
+Включить обратно:
+
+`/discounton 1`

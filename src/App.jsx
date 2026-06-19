@@ -17,32 +17,42 @@ const EXTRA_SERVICES = [
   { id: 'other_return', label: 'Возврат в другом месте', price: 50 }
 ];
 
-function calculatePrice(pricePerDay, daysCount, extras) {
+function calculatePrice(pricePerDay, daysCount, extras, discountRules = []) {
   if (!daysCount || !pricePerDay) {
-    return { basePrice: 0, extrasTotal: 0, totalPrice: 0, discountLabel: '' };
+    return {
+      originalBasePrice: 0,
+      basePrice: 0,
+      discountAmount: 0,
+      discountPercent: 0,
+      discountLabel: '',
+      extrasTotal: 0,
+      totalPrice: 0
+    };
   }
 
-  let multiplier = 1;
-  let discountLabel = '';
+  const originalBasePrice = Math.round(Number(pricePerDay) * daysCount);
 
-  if (daysCount >= 14) {
-    multiplier = 0.85;
-    discountLabel = 'Скидка 15% за аренду от 14 дней';
-  } else if (daysCount >= 7) {
-    multiplier = 0.9;
-    discountLabel = 'Скидка 10% за аренду от 7 дней';
-  }
+  const applicableRule = [...(discountRules || [])]
+    .filter((rule) => rule.is_active !== false && daysCount >= Number(rule.min_days || 0))
+    .sort((a, b) => Number(b.min_days || 0) - Number(a.min_days || 0))[0];
 
-  const basePrice = Math.round(Number(pricePerDay) * daysCount * multiplier);
+  const discountPercent = applicableRule ? Number(applicableRule.discount_percent || 0) : 0;
+  const discountAmount = Math.round(originalBasePrice * (discountPercent / 100));
+  const basePrice = Math.max(0, originalBasePrice - discountAmount);
+  const discountLabel = applicableRule?.label || (discountPercent ? `Скидка ${discountPercent}%` : '');
+
   const extrasTotal = EXTRA_SERVICES.reduce((sum, service) => {
     return extras?.[service.id] ? sum + service.price : sum;
   }, 0);
 
   return {
+    originalBasePrice,
     basePrice,
+    discountAmount,
+    discountPercent,
+    discountLabel,
     extrasTotal,
-    totalPrice: basePrice + extrasTotal,
-    discountLabel
+    totalPrice: basePrice + extrasTotal
   };
 }
 
@@ -362,6 +372,7 @@ function VisualCalendar({ startDate, endDate, busyRanges, onChange, loading }) {
 function App() {
   const [view, setView] = useState('catalog');
   const [cars, setCars] = useState([]);
+  const [discountRules, setDiscountRules] = useState([]);
   const [selectedCar, setSelectedCar] = useState(null);
   const [busyRanges, setBusyRanges] = useState([]);
   const [myBookings, setMyBookings] = useState([]);
@@ -392,6 +403,7 @@ function App() {
     }
 
     loadCars();
+    loadDiscountRules();
   }, []);
 
   useEffect(() => {
@@ -425,6 +437,19 @@ function App() {
     }
 
     setLoading(false);
+  }
+
+  async function loadDiscountRules() {
+    try {
+      const response = await fetch('/api/discount-rules');
+      const result = await response.json();
+
+      if (response.ok) {
+        setDiscountRules(result.discount_rules || []);
+      }
+    } catch (error) {
+      console.warn('Не удалось загрузить правила скидок:', error);
+    }
   }
 
   async function loadAvailability(carId) {
@@ -480,9 +505,9 @@ function App() {
 
   const daysCount = useMemo(() => daysBetween(form.start_date, form.end_date), [form.start_date, form.end_date]);
   const priceBreakdown = useMemo(() => {
-    if (!selectedCar) return { basePrice: 0, extrasTotal: 0, totalPrice: 0, discountLabel: '' };
-    return calculatePrice(selectedCar.price_per_day, daysCount, extras);
-  }, [selectedCar, daysCount, extras]);
+    if (!selectedCar) return { originalBasePrice: 0, basePrice: 0, discountAmount: 0, discountPercent: 0, discountLabel: '', extrasTotal: 0, totalPrice: 0 };
+    return calculatePrice(selectedCar.price_per_day, daysCount, extras, discountRules);
+  }, [selectedCar, daysCount, extras, discountRules]);
 
   const totalPrice = priceBreakdown.totalPrice;
 
@@ -516,6 +541,9 @@ function App() {
           end_date: form.end_date,
           days_count: daysCount,
           base_price: priceBreakdown.basePrice,
+          discount_percent: priceBreakdown.discountPercent,
+          discount_amount: priceBreakdown.discountAmount,
+          discount_label: priceBreakdown.discountLabel,
           extras_total: priceBreakdown.extrasTotal,
           extras,
           total_price: totalPrice,
@@ -649,7 +677,8 @@ function App() {
             <div>
               <b>{daysCount || 0} дней</b>
               <span>Аренда: {priceBreakdown.basePrice || 0} €</span>
-              {priceBreakdown.discountLabel && <span>{priceBreakdown.discountLabel}</span>}
+              {priceBreakdown.discountAmount > 0 && <span>Без скидки: {priceBreakdown.originalBasePrice} €</span>}
+              {priceBreakdown.discountAmount > 0 && <span>Скидка: −{priceBreakdown.discountAmount} € · {priceBreakdown.discountLabel}</span>}
               {priceBreakdown.extrasTotal > 0 && <span>Доп. услуги: {priceBreakdown.extrasTotal} €</span>}
               <span>Итого: {totalPrice || 0} €</span>
             </div>
@@ -658,6 +687,17 @@ function App() {
           <p className="hint">
             Красные даты заняты подтверждёнными бронями. Дата возврата не считается занятым днём.
           </p>
+
+          {discountRules.length > 0 && (
+            <div className="discount-rules-box">
+              <b>Скидки за длительную аренду</b>
+              {discountRules.map((rule) => (
+                <span key={rule.id}>
+                  от {rule.min_days} дней — {rule.discount_percent}% {rule.label ? `· ${rule.label}` : ''}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="card">
