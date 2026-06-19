@@ -9,6 +9,10 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
 
+const INCLUDED_KM_PER_DAY = 200;
+const EXTRA_KM_PRICE = 0.25;
+const RENTAL_RULES_VERSION = 'v1.0_2026_06';
+
 const DEFAULT_EXTRA_SERVICES = [
   { code: 'delivery_barcelona', id: 'delivery_barcelona', name: '🚗 Доставка по Барселоне', label: '🚗 Доставка по Барселоне', description: 'Доставка автомобиля в пределах Барселоны', price: 30, price_type: 'fixed', sort_order: 1 },
   { code: 'delivery_airport', id: 'delivery_airport', name: '✈️ Доставка в аэропорт BCN', label: '✈️ Доставка в аэропорт BCN', description: 'Доставка автомобиля в аэропорт Barcelona-El Prat', price: 40, price_type: 'fixed', sort_order: 2 },
@@ -65,7 +69,7 @@ function getSelectedExtraCodes(extras) {
 }
 
 function calculateIncludedKm(daysCount, extras, extraServices = DEFAULT_EXTRA_SERVICES) {
-  const baseKm = Math.max(Number(daysCount || 0), 0) * 200;
+  const baseKm = Math.max(Number(daysCount || 0), 0) * INCLUDED_KM_PER_DAY;
   const selectedCodes = getSelectedExtraCodes(extras);
   const extraKm = selectedCodes.reduce((sum, code) => {
     const service = extraServices.find((item) => item.code === code || item.id === code);
@@ -444,6 +448,7 @@ function App() {
   const [bookingSent, setBookingSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [extras, setExtras] = useState({});
+  const [rulesAccepted, setRulesAccepted] = useState(false);
 
   const [form, setForm] = useState({
     customer_name: '',
@@ -472,6 +477,7 @@ function App() {
     if (selectedCar?.id) {
       setForm((prev) => ({ ...prev, start_date: '', end_date: '' }));
       setExtras({});
+      setRulesAccepted(false);
       loadAvailability(selectedCar.id);
     }
   }, [selectedCar?.id]);
@@ -616,6 +622,7 @@ function App() {
     if (!form.phone.trim()) return alert('Введите телефон.');
     if (!form.start_date || !form.end_date) return alert('Выберите даты в календаре.');
     if (daysCount <= 0) return alert('Дата возврата должна быть позже даты начала.');
+    if (!rulesAccepted) return alert('Перед отправкой заявки нужно принять правила аренды.');
     if (!isRangeAvailable(form.start_date, form.end_date, busyRanges)) {
       return alert('Выбранный период пересекается с уже подтверждённой бронью.');
     }
@@ -643,6 +650,10 @@ function App() {
           extras,
           selected_extra_service_codes: selectedExtraCodes,
           included_km: includedKm,
+          included_km_per_day: INCLUDED_KM_PER_DAY,
+          extra_km_price: EXTRA_KM_PRICE,
+          rules_accepted: rulesAccepted,
+          rules_version: RENTAL_RULES_VERSION,
           total_price: totalPrice,
           comment: form.comment || '',
           telegram_user_id: tgUser?.id ? String(tgUser.id) : null,
@@ -703,6 +714,8 @@ function App() {
               <p>{booking.start_date} — {booking.end_date}</p>
               <p>{booking.days_count} дней · {booking.total_price} €</p>
               {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
+              {booking.included_km && <p>Включено: {booking.included_km} км</p>}
+              {booking.extra_km_price && <p>Доп. км: {booking.extra_km_price} €/км</p>}
             </article>
           ))}
         </section>
@@ -722,6 +735,7 @@ function App() {
           setBusyRanges([]);
           setForm({ customer_name: '', phone: '', start_date: '', end_date: '', comment: '' });
           setExtras({});
+          setRulesAccepted(false);
         }}>
           Вернуться в каталог
         </button>
@@ -777,7 +791,8 @@ function App() {
               {priceBreakdown.discountAmount > 0 && <span>Без скидки: {priceBreakdown.originalBasePrice} €</span>}
               {priceBreakdown.discountAmount > 0 && <span>Скидка: −{priceBreakdown.discountAmount} € · {priceBreakdown.discountLabel}</span>}
               {priceBreakdown.extrasTotal > 0 && <span>Доп. услуги: {priceBreakdown.extrasTotal} €</span>}
-              <span>Включено: {includedKm || 0} км</span>
+              <span>Включено: {includedKm || 0} км ({INCLUDED_KM_PER_DAY} км/день)</span>
+              <span>Доп. км сверх лимита: {EXTRA_KM_PRICE} €/км</span>
               <span>Итого: {totalPrice || 0} €</span>
             </div>
           </div>
@@ -818,6 +833,38 @@ function App() {
           </div>
         </section>
 
+        <section className="card rules-card">
+          <h2>Пробег и правила аренды</h2>
+
+          <div className="mileage-box">
+            <b>В стоимость включено: {INCLUDED_KM_PER_DAY} км/день</b>
+            <span>На выбранный срок: {includedKm || 0} км</span>
+            <span>Дополнительный пробег сверх лимита: {EXTRA_KM_PRICE} €/км</span>
+          </div>
+
+          <div className="rules-text">
+            <p><b>Основные условия аренды:</b></p>
+            <p>Депозит возвращается после проверки автомобиля, если нет новых повреждений, штрафов, задолженностей, превышения пробега или нарушения условий аренды.</p>
+            <p>Автомобиль выдается и возвращается с зафиксированным уровнем топлива. Если топлива меньше, клиент оплачивает недостающее топливо и сервисный сбор 20 €.</p>
+            <p>Опоздание до 30 минут — бесплатно. Опоздание более 30 минут — 20 €. Опоздание более 2 часов может считаться дополнительным днем аренды.</p>
+            <p>Перед выдачей и возвратом автомобиля делаются фото/видео. Клиент отвечает за новые повреждения, появившиеся во время аренды.</p>
+            <p>Штрафы, парковки, камеры, платные дороги и эвакуация оплачиваются клиентом. Если штраф приходит после аренды, клиент также обязан оплатить его. За обработку штрафа может взиматься административный сбор 25 €.</p>
+            <p>Отмена более чем за 48 часов — бесплатно. Отмена за 24–48 часов — удерживается 50% предоплаты. Отмена менее чем за 24 часа — предоплата не возвращается.</p>
+            <p>Минимальный возраст водителя — 21 год, стаж — от 2 лет. Для премиум-авто — от 25 лет и стаж от 5 лет.</p>
+            <p>Для аренды нужны паспорт/DNI/NIE, водительские права и контактный телефон. Для не-EU прав может потребоваться международное водительское удостоверение или официальный перевод.</p>
+            <p>Запрещено передавать авто другому водителю без согласования, курить в салоне, использовать авто для гонок/дрифта, выезжать за пределы Испании без согласования.</p>
+          </div>
+
+          <label className="rules-checkbox">
+            <input
+              type="checkbox"
+              checked={rulesAccepted}
+              onChange={(e) => setRulesAccepted(e.target.checked)}
+            />
+            <span>Я прочитал(а) и принимаю правила аренды, условия депозита, пробега, штрафов, топлива, отмены и ответственности за автомобиль.</span>
+          </label>
+        </section>
+
         <section className="card">
           <h2>Ваши данные</h2>
           <label>
@@ -835,7 +882,9 @@ function App() {
             <textarea value={form.comment} onChange={(e) => updateForm('comment', e.target.value)} placeholder="Где удобно получить авто, вопросы, пожелания" />
           </label>
 
-          <button className="primary-btn" onClick={sendBooking} disabled={sending}>
+          {!rulesAccepted && <p className="rules-warning">Чтобы отправить заявку, примите правила аренды выше.</p>}
+
+          <button className="primary-btn" onClick={sendBooking} disabled={sending || !rulesAccepted}>
             {sending ? <Loader2 size={18} className="spin" /> : <Send size={18} />}
             {sending ? 'Отправляем...' : 'Отправить заявку'}
           </button>

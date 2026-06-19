@@ -1,6 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 import { escapeHtml, telegramApi, getBody, findUnavailableOverlap } from './_utils.js';
 
+const INCLUDED_KM_PER_DAY = 200;
+const EXTRA_KM_PRICE = 0.25;
+const RENTAL_RULES_VERSION = 'v1.0_2026_06';
+
 const FALLBACK_EXTRA_SERVICES = [
   { code: 'delivery_barcelona', name: '🚗 Доставка по Барселоне', price: 30, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 1 },
   { code: 'delivery_airport', name: '✈️ Доставка в аэропорт BCN', price: 40, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 2 },
@@ -106,6 +110,10 @@ export default async function handler(req, res) {
       }
     }
 
+    if (payload.rules_accepted !== true) {
+      return res.status(400).json({ error: 'Перед отправкой заявки нужно принять правила аренды.' });
+    }
+
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const { data: car, error: carError } = await supabase
@@ -161,6 +169,10 @@ export default async function handler(req, res) {
     const basePrice = Number(payload.base_price || 0);
     const totalPrice = basePrice + extrasTotal;
     const extras = buildExtrasObject(selectedServices);
+    const includedKmPerDay = Number(payload.included_km_per_day || INCLUDED_KM_PER_DAY);
+    const includedKm = Number(payload.included_km || (Number(payload.days_count || 0) * includedKmPerDay));
+    const extraKmPrice = Number(payload.extra_km_price || EXTRA_KM_PRICE);
+    const rulesVersion = payload.rules_version || RENTAL_RULES_VERSION;
 
     const { data: booking, error: bookingError } = await supabase
       .from('bookings')
@@ -181,7 +193,13 @@ export default async function handler(req, res) {
         status: 'new',
         comment: payload.comment || '',
         telegram_user_id: payload.telegram_user_id ? String(payload.telegram_user_id) : null,
-        telegram_username: payload.telegram_username || null
+        telegram_username: payload.telegram_username || null,
+        included_km: includedKm,
+        included_km_per_day: includedKmPerDay,
+        extra_km_price: extraKmPrice,
+        rules_accepted: true,
+        rules_accepted_at: new Date().toISOString(),
+        rules_version: rulesVersion
       })
       .select()
       .single();
@@ -215,7 +233,6 @@ export default async function handler(req, res) {
         .map(({ row }) => `${row.service_name} — ${row.total} €`)
         .join('\n');
 
-      const includedKm = Number(payload.included_km || (Number(payload.days_count || 0) * 200));
 
       const text = [
         '🚗 <b>Новая заявка на аренду</b>',
@@ -227,7 +244,9 @@ export default async function handler(req, res) {
         payload.discount_amount ? `<b>Скидка:</b> −${escapeHtml(payload.discount_amount)} €${payload.discount_label ? ' · ' + escapeHtml(payload.discount_label) : ''}` : '',
         extrasTotal ? `<b>Доп. услуги:</b> ${escapeHtml(extrasTotal)} €` : '',
         servicesText ? `<b>Выбрано:</b>\n${escapeHtml(servicesText)}` : '',
-        includedKm ? `<b>Включено км:</b> ${escapeHtml(includedKm)} км` : '',
+        includedKm ? `<b>Включено км:</b> ${escapeHtml(includedKm)} км (${escapeHtml(includedKmPerDay)} км/день)` : '',
+        `<b>Доп. км сверх лимита:</b> ${escapeHtml(extraKmPrice)} €/км`,
+        `<b>Правила приняты:</b> да · ${escapeHtml(rulesVersion)}`,
         `<b>Сумма:</b> ${escapeHtml(totalPrice)} €`,
         car.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',
         '',

@@ -59,3 +59,11 @@ on conflict (code) do update set
   extra_km = excluded.extra_km,
   is_active = excluded.is_active,
   sort_order = excluded.sort_order;
+
+-- Правила аренды, пробег и согласие клиента.
+alter table bookings add column if not exists included_km int;
+alter table bookings add column if not exists included_km_per_day int default 200;
+alter table bookings add column if not exists extra_km_price numeric(10,2) default 0.25;
+alter table bookings add column if not exists rules_accepted boolean default false;
+alter table bookings add column if not exists rules_accepted_at timestamptz;
+alter table bookings add column if not exists rules_version text;
