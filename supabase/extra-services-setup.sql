@@ -67,3 +67,15 @@ alter table bookings add column if not exists extra_km_price numeric(10,2) defau
 alter table bookings add column if not exists rules_accepted boolean default false;
 alter table bookings add column if not exists rules_accepted_at timestamptz;
 alter table bookings add column if not exists rules_version text;
+
+-- Предоплата для фиксации брони.
+alter table bookings add column if not exists prepayment_amount numeric(10,2) default 0;
+alter table bookings add column if not exists prepayment_status text default 'pending';
+alter table bookings add column if not exists prepayment_paid_at timestamptz;
+alter table bookings add column if not exists payment_method text;
+alter table bookings add column if not exists remaining_amount numeric(10,2) default 0;
+
+-- Новые статусы, которые используются в приложении:
+-- pending_prepayment — заявка создана, ожидает предоплату
+-- confirmed — предоплата отмечена админом, бронь подтверждена
+-- cancelled — бронь отменена/отклонена

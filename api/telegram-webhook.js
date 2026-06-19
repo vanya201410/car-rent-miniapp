@@ -4,14 +4,17 @@ import { escapeHtml, telegramApi, getBody, findUnavailableOverlap, buildAdminBoo
 function clientMessage({ status, booking, car }) {
   if (status === 'confirmed') {
     return [
-      '✅ <b>Ваша бронь подтверждена</b>',
+      '✅ <b>Предоплата получена. Бронь подтверждена</b>',
       '',
       `<b>Авто:</b> ${escapeHtml(car?.brand || '')} ${escapeHtml(car?.model || '')}`,
       `<b>Даты:</b> ${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)}`,
-      `<b>Сумма:</b> ${escapeHtml(booking.total_price)} €`,
+      `<b>Сумма аренды:</b> ${escapeHtml(booking.total_price)} €`,
+      booking.prepayment_amount ? `<b>Предоплата:</b> ${escapeHtml(booking.prepayment_amount)} € ✅` : '',
+      booking.remaining_amount !== undefined && booking.remaining_amount !== null ? `<b>Остаток при получении:</b> ${escapeHtml(booking.remaining_amount)} €` : '',
+      car?.deposit ? `<b>Залог при получении:</b> ${escapeHtml(car.deposit)} €` : '',
       '',
-      'Менеджер скоро свяжется с вами для уточнения деталей.'
-    ].join('\n');
+      'Менеджер скоро свяжется с вами для уточнения деталей выдачи автомобиля.'
+    ].filter(Boolean).join('\n');
   }
 
   if (status === 'cancelled_by_admin') {
@@ -34,6 +37,7 @@ function clientMessage({ status, booking, car }) {
     'Менеджер может предложить вам другой автомобиль или другие даты.'
   ].join('\n');
 }
+
 
 function adminMenuMarkup() {
   return {
@@ -485,14 +489,21 @@ async function loadCarsByIds(supabase, carIds) {
 }
 
 async function renderBookingsList({ supabase, botToken, chatId, messageId, status }) {
-  const title = status === 'new' ? '🆕 <b>Новые заявки</b>' : '✅ <b>Подтверждённые брони</b>';
+  const title = status === 'new' ? '🆕 <b>Новые заявки / ожидают предоплату</b>' : '✅ <b>Подтверждённые брони</b>';
 
-  const { data: bookings, error } = await supabase
+  let query = supabase
     .from('bookings')
     .select('*')
-    .eq('status', status)
     .order('created_at', { ascending: false })
     .limit(10);
+
+  if (status === 'new') {
+    query = query.in('status', ['new', 'pending_prepayment']);
+  } else {
+    query = query.eq('status', status);
+  }
+
+  const { data: bookings, error } = await query;
 
   if (error) {
     return telegramApi(botToken, 'editMessageText', {
@@ -511,14 +522,15 @@ async function renderBookingsList({ supabase, botToken, chatId, messageId, statu
     return [
       `#${booking.id} — ${escapeHtml(car?.brand || 'car')} ${escapeHtml(car?.model || '')}`,
       `${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)} · ${escapeHtml(booking.total_price)} €`,
+      booking.prepayment_amount ? `Предоплата: ${escapeHtml(booking.prepayment_amount)} € · ${booking.prepayment_status === 'paid' ? 'оплачена' : 'ожидается'}` : '',
       `${escapeHtml(booking.customer_name)} · ${escapeHtml(booking.phone)}`
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   });
 
   const keyboard = (bookings || []).map((booking) => {
     if (status === 'new') {
       return [
-        { text: `✅ #${booking.id}`, callback_data: `confirm_booking:${booking.id}` },
+        { text: `💰 Оплата #${booking.id}`, callback_data: `prepayment_paid:${booking.id}` },
         { text: `❌ #${booking.id}`, callback_data: `decline_booking:${booking.id}` }
       ];
     }
@@ -961,7 +973,7 @@ export default async function handler(req, res) {
     }
 
     const [action, bookingId] = callbackData.split(':');
-    const allowedActions = ['confirm_booking', 'decline_booking', 'cancel_booking'];
+    const allowedActions = ['confirm_booking', 'prepayment_paid', 'decline_booking', 'cancel_booking'];
 
     if (!bookingId || !allowedActions.includes(action)) {
       await telegramApi(botToken, 'answerCallbackQuery', {
@@ -999,7 +1011,7 @@ export default async function handler(req, res) {
     let clientStatus = 'declined';
     let replyMarkup = undefined;
 
-    if (action === 'confirm_booking') {
+    if (action === 'confirm_booking' || action === 'prepayment_paid') {
       const overlap = await findUnavailableOverlap(
         supabase,
         booking.car_id,
@@ -1019,8 +1031,8 @@ export default async function handler(req, res) {
       }
 
       newStatus = 'confirmed';
-      callbackText = 'Заявка подтверждена';
-      adminTitle = '✅ <b>Заявка подтверждена</b>';
+      callbackText = action === 'prepayment_paid' ? 'Предоплата отмечена, бронь подтверждена' : 'Заявка подтверждена';
+      adminTitle = action === 'prepayment_paid' ? '✅ <b>Предоплата получена. Бронь подтверждена</b>' : '✅ <b>Заявка подтверждена</b>';
       clientStatus = 'confirmed';
       replyMarkup = {
         inline_keyboard: [
@@ -1054,9 +1066,17 @@ export default async function handler(req, res) {
       clientStatus = 'cancelled_by_admin';
     }
 
+    const updatePayload = { status: newStatus };
+
+    if (action === 'prepayment_paid') {
+      updatePayload.prepayment_status = 'paid';
+      updatePayload.prepayment_paid_at = new Date().toISOString();
+      updatePayload.payment_method = booking.payment_method || 'manual_admin';
+    }
+
     const { data: updatedBooking, error: updateError } = await supabase
       .from('bookings')
-      .update({ status: newStatus })
+      .update(updatePayload)
       .eq('id', bookingId)
       .select()
       .single();

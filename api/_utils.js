@@ -95,6 +95,7 @@ export async function findUnavailableOverlap(supabase, carId, startDate, endDate
 
 export function bookingStatusText(status) {
   if (status === 'new') return 'новая';
+  if (status === 'pending_prepayment') return 'ожидает предоплату ⏳';
   if (status === 'confirmed') return 'подтверждена ✅';
   if (status === 'cancelled') return 'отменена ❌';
   if (status === 'completed') return 'завершена 🏁';
@@ -133,6 +134,8 @@ export function buildAdminBookingText({ title, booking, car }) {
     booking.discount_amount ? `<b>Скидка:</b> −${escapeHtml(booking.discount_amount)} €${booking.discount_label ? ' · ' + escapeHtml(booking.discount_label) : ''}` : '',
     booking.extras_total ? `<b>Доп. услуги:</b> ${escapeHtml(booking.extras_total)} €` : '',
     `<b>Сумма:</b> ${escapeHtml(booking.total_price)} €`,
+    booking.prepayment_amount ? `<b>Предоплата:</b> ${escapeHtml(booking.prepayment_amount)} €${booking.prepayment_status === 'paid' ? ' ✅' : ' ⏳'}` : '',
+    booking.remaining_amount !== undefined && booking.remaining_amount !== null ? `<b>Остаток при получении:</b> ${escapeHtml(booking.remaining_amount)} €` : '',
     car?.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',
     extras.length ? `<b>Услуги:</b> ${escapeHtml(extras.join(', '))}` : '',
     '',

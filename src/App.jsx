@@ -13,6 +13,31 @@ const INCLUDED_KM_PER_DAY = 200;
 const EXTRA_KM_PRICE = 0.25;
 const RENTAL_RULES_VERSION = 'v1.0_2026_06';
 
+function isPremiumCar(car) {
+  const text = `${car?.brand || ''} ${car?.model || ''}`.toLowerCase();
+  const deposit = Number(car?.deposit || 0);
+  const pricePerDay = Number(car?.price_per_day || 0);
+
+  return text.includes('jaguar') || deposit >= 800 || pricePerDay >= 120;
+}
+
+function calculatePrepaymentAmount(car, daysCount, totalPrice) {
+  const total = Math.max(Number(totalPrice || 0), 0);
+  if (!total) return 0;
+
+  let amount = 50;
+
+  if (isPremiumCar(car)) {
+    amount = 100;
+  } else if (Number(daysCount || 0) <= 3) {
+    amount = 30;
+  } else {
+    amount = 50;
+  }
+
+  return Math.min(amount, total);
+}
+
 const DEFAULT_EXTRA_SERVICES = [
   { code: 'delivery_barcelona', id: 'delivery_barcelona', name: '🚗 Доставка по Барселоне', label: '🚗 Доставка по Барселоне', description: 'Доставка автомобиля в пределах Барселоны', price: 30, price_type: 'fixed', sort_order: 1 },
   { code: 'delivery_airport', id: 'delivery_airport', name: '✈️ Доставка в аэропорт BCN', label: '✈️ Доставка в аэропорт BCN', description: 'Доставка автомобиля в аэропорт Barcelona-El Prat', price: 40, price_type: 'fixed', sort_order: 2 },
@@ -122,6 +147,7 @@ function calculatePrice(pricePerDay, daysCount, extras, discountRules = [], extr
 
 function bookingStatusLabel(status) {
   if (status === 'new') return 'Ожидает подтверждения';
+  if (status === 'pending_prepayment') return 'Ожидает предоплату';
   if (status === 'confirmed') return 'Подтверждена';
   if (status === 'cancelled') return 'Отменена';
   if (status === 'completed') return 'Завершена';
@@ -446,6 +472,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [bookingSent, setBookingSent] = useState(false);
+  const [sentBooking, setSentBooking] = useState(null);
   const [sending, setSending] = useState(false);
   const [extras, setExtras] = useState({});
   const [rulesAccepted, setRulesAccepted] = useState(false);
@@ -609,6 +636,11 @@ function App() {
   }, [selectedCar, daysCount, extras, discountRules, extraServices]);
 
   const totalPrice = priceBreakdown.totalPrice;
+  const prepaymentAmount = useMemo(
+    () => calculatePrepaymentAmount(selectedCar, daysCount, totalPrice),
+    [selectedCar, daysCount, totalPrice]
+  );
+  const remainingAmount = Math.max(0, Number(totalPrice || 0) - Number(prepaymentAmount || 0));
   const includedKm = useMemo(() => calculateIncludedKm(daysCount, extras, extraServices), [daysCount, extras, extraServices]);
   const selectedExtraCodes = useMemo(() => getSelectedExtraCodes(extras), [extras]);
 
@@ -654,6 +686,8 @@ function App() {
           extra_km_price: EXTRA_KM_PRICE,
           rules_accepted: rulesAccepted,
           rules_version: RENTAL_RULES_VERSION,
+          prepayment_amount: prepaymentAmount,
+          remaining_amount: remainingAmount,
           total_price: totalPrice,
           comment: form.comment || '',
           telegram_user_id: tgUser?.id ? String(tgUser.id) : null,
@@ -667,6 +701,7 @@ function App() {
         throw new Error(result.error || 'Ошибка отправки заявки');
       }
 
+      setSentBooking(result.booking || null);
       setBookingSent(true);
 
       const tg = window.Telegram?.WebApp;
@@ -713,6 +748,8 @@ function App() {
               </div>
               <p>{booking.start_date} — {booking.end_date}</p>
               <p>{booking.days_count} дней · {booking.total_price} €</p>
+              {booking.prepayment_amount > 0 && <p>Предоплата: {booking.prepayment_amount} € · {booking.prepayment_status === 'paid' ? 'оплачена' : 'ожидается'}</p>}
+              {booking.remaining_amount !== null && booking.remaining_amount !== undefined && <p>Остаток при получении: {booking.remaining_amount} €</p>}
               {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
               {booking.included_km && <p>Включено: {booking.included_km} км</p>}
               {booking.extra_km_price && <p>Доп. км: {booking.extra_km_price} €/км</p>}
@@ -729,8 +766,19 @@ function App() {
         <CheckCircle2 size={56} />
         <h1>Заявка отправлена</h1>
         <p>Менеджер получил уведомление в Telegram и скоро свяжется с вами.</p>
+        {sentBooking?.prepayment_amount > 0 && (
+          <section className="card prepayment-card">
+            <h2>Предоплата для фиксации брони</h2>
+            <p><b>{sentBooking.prepayment_amount} €</b> — нужно внести, чтобы закрепить автомобиль за вами.</p>
+            <p>Предоплата входит в стоимость аренды.</p>
+            <p>Остаток при получении автомобиля: <b>{sentBooking.remaining_amount} €</b></p>
+            <p>Залог оплачивается отдельно при получении автомобиля.</p>
+            <p className="hint">Менеджер отправит реквизиты и подтвердит бронь после поступления предоплаты.</p>
+          </section>
+        )}
         <button onClick={() => {
           setBookingSent(false);
+          setSentBooking(null);
           setSelectedCar(null);
           setBusyRanges([]);
           setForm({ customer_name: '', phone: '', start_date: '', end_date: '', comment: '' });
@@ -793,6 +841,8 @@ function App() {
               {priceBreakdown.extrasTotal > 0 && <span>Доп. услуги: {priceBreakdown.extrasTotal} €</span>}
               <span>Включено: {includedKm || 0} км ({INCLUDED_KM_PER_DAY} км/день)</span>
               <span>Доп. км сверх лимита: {EXTRA_KM_PRICE} €/км</span>
+              {prepaymentAmount > 0 && <span>Предоплата для фиксации: {prepaymentAmount} €</span>}
+              {prepaymentAmount > 0 && <span>Остаток при получении: {remainingAmount} €</span>}
               <span>Итого: {totalPrice || 0} €</span>
             </div>
           </div>
@@ -831,6 +881,17 @@ function App() {
               </label>
             ))}
           </div>
+        </section>
+
+        <section className="card prepayment-card">
+          <h2>Предоплата</h2>
+          <div className="mileage-box">
+            <b>Для фиксации брони: {prepaymentAmount || 0} €</b>
+            <span>Предоплата входит в стоимость аренды.</span>
+            <span>Остаток при получении автомобиля: {remainingAmount || 0} €</span>
+            <span>Залог оплачивается отдельно при получении автомобиля.</span>
+          </div>
+          <p className="hint">После отправки заявки менеджер пришлет реквизиты. Бронь подтверждается после поступления предоплаты.</p>
         </section>
 
         <section className="card rules-card">

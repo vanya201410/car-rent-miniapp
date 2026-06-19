@@ -5,6 +5,34 @@ const INCLUDED_KM_PER_DAY = 200;
 const EXTRA_KM_PRICE = 0.25;
 const RENTAL_RULES_VERSION = 'v1.0_2026_06';
 
+const PREPAYMENT_STATUS_PENDING = 'pending';
+const PREPAYMENT_STATUS_PAID = 'paid';
+
+function isPremiumCar(car) {
+  const text = `${car?.brand || ''} ${car?.model || ''}`.toLowerCase();
+  const deposit = Number(car?.deposit || 0);
+  const pricePerDay = Number(car?.price_per_day || 0);
+
+  return text.includes('jaguar') || deposit >= 800 || pricePerDay >= 120;
+}
+
+function calculatePrepaymentAmount(car, daysCount, totalPrice) {
+  const total = Math.max(Number(totalPrice || 0), 0);
+  if (!total) return 0;
+
+  let amount = 50;
+
+  if (isPremiumCar(car)) {
+    amount = 100;
+  } else if (Number(daysCount || 0) <= 3) {
+    amount = 30;
+  } else {
+    amount = 50;
+  }
+
+  return Math.min(amount, total);
+}
+
 const FALLBACK_EXTRA_SERVICES = [
   { code: 'delivery_barcelona', name: '🚗 Доставка по Барселоне', price: 30, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 1 },
   { code: 'delivery_airport', name: '✈️ Доставка в аэропорт BCN', price: 40, price_type: 'fixed', max_price: null, extra_km: 0, is_active: true, sort_order: 2 },
@@ -173,6 +201,8 @@ export default async function handler(req, res) {
     const includedKm = Number(payload.included_km || (Number(payload.days_count || 0) * includedKmPerDay));
     const extraKmPrice = Number(payload.extra_km_price || EXTRA_KM_PRICE);
     const rulesVersion = payload.rules_version || RENTAL_RULES_VERSION;
+    const prepaymentAmount = calculatePrepaymentAmount(car, payload.days_count, totalPrice);
+    const remainingAmount = Math.max(0, totalPrice - prepaymentAmount);
 
     const { data: booking, error: bookingError } = await supabase
       .from('bookings')
@@ -190,7 +220,12 @@ export default async function handler(req, res) {
         extras_total: extrasTotal,
         extras,
         total_price: totalPrice,
-        status: 'new',
+        status: 'pending_prepayment',
+        prepayment_amount: prepaymentAmount,
+        prepayment_status: PREPAYMENT_STATUS_PENDING,
+        prepayment_paid_at: null,
+        payment_method: null,
+        remaining_amount: remainingAmount,
         comment: payload.comment || '',
         telegram_user_id: payload.telegram_user_id ? String(payload.telegram_user_id) : null,
         telegram_username: payload.telegram_username || null,
@@ -248,6 +283,9 @@ export default async function handler(req, res) {
         `<b>Доп. км сверх лимита:</b> ${escapeHtml(extraKmPrice)} €/км`,
         `<b>Правила приняты:</b> да · ${escapeHtml(rulesVersion)}`,
         `<b>Сумма:</b> ${escapeHtml(totalPrice)} €`,
+        `<b>Предоплата для фиксации:</b> ${escapeHtml(prepaymentAmount)} €`,
+        `<b>Остаток при получении:</b> ${escapeHtml(remainingAmount)} €`,
+        `<b>Статус предоплаты:</b> ожидается`,
         car.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',
         '',
         `<b>Клиент:</b> ${escapeHtml(payload.customer_name)}`,
@@ -266,7 +304,9 @@ export default async function handler(req, res) {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '✅ Подтвердить', callback_data: `confirm_booking:${booking.id}` },
+              { text: '💰 Предоплата получена', callback_data: `prepayment_paid:${booking.id}` }
+            ],
+            [
               { text: '❌ Отклонить', callback_data: `decline_booking:${booking.id}` }
             ]
           ]
