@@ -808,11 +808,14 @@ function App() {
           <p className="muted">Залог: {selectedCar.deposit} €</p>
 
           <div className="spec-grid">
-            <div><Car size={18} /> {selectedCar.transmission}</div>
-            <div><Fuel size={18} /> {selectedCar.fuel_type}</div>
-            <div><Users size={18} /> {selectedCar.seats} мест</div>
-            <div><MapPin size={18} /> {selectedCar.city}</div>
-          </div>
+  <div><Car size={18} /> {selectedCar.transmission}</div>
+  <div><Fuel size={18} /> {selectedCar.fuel_type}</div>
+  <div><Users size={18} /> {selectedCar.seats} мест</div>
+  <div><MapPin size={18} /> {selectedCar.city}</div>
+  {selectedCar.fuel_consumption && (
+    <div><Fuel size={18} /> Расход: {selectedCar.fuel_consumption}</div>
+  )}
+</div>
 
           <p>{selectedCar.description}</p>
         </section>
