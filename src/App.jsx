@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Calendar, Car, CheckCircle2, ChevronLeft, ChevronRight, Fuel, Loader2, MapPin, Send, Users } from 'lucide-react';
+import { Calendar, Car, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, Fuel, Loader2, MapPin, Send, Users } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -148,6 +148,7 @@ function calculatePrice(pricePerDay, daysCount, extras, discountRules = [], extr
 function bookingStatusLabel(status) {
   if (status === 'new') return 'Ожидает подтверждения';
   if (status === 'pending_prepayment') return 'Ожидает предоплату';
+  if (status === 'payment_conflict') return 'Оплачено, нужна проверка';
   if (status === 'confirmed') return 'Подтверждена';
   if (status === 'cancelled') return 'Отменена';
   if (status === 'completed') return 'Завершена';
@@ -474,6 +475,8 @@ function App() {
   const [bookingSent, setBookingSent] = useState(false);
   const [sentBooking, setSentBooking] = useState(null);
   const [sending, setSending] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentNotice, setPaymentNotice] = useState(null);
   const [extras, setExtras] = useState({});
   const [rulesAccepted, setRulesAccepted] = useState(false);
 
@@ -489,6 +492,26 @@ function App() {
     const tg = window.Telegram?.WebApp;
     tg?.ready();
     tg?.expand();
+
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get('payment');
+    const bookingId = params.get('booking_id');
+
+    if (payment === 'success') {
+      setPaymentNotice({
+        type: 'success',
+        text: `✅ Оплата отправлена. Stripe подтверждает платеж, бронь #${bookingId || ''} скоро обновится.`
+      });
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    if (payment === 'cancel') {
+      setPaymentNotice({
+        type: 'warning',
+        text: `Оплата отменена. Бронь #${bookingId || ''} осталась в ожидании предоплаты.`
+      });
+      window.history.replaceState({}, '', window.location.pathname);
+    }
 
     const user = getTelegramUser();
     if (user?.first_name) {
@@ -714,6 +737,36 @@ function App() {
   }
 
 
+  async function payPrepayment(bookingId) {
+    if (!bookingId) return alert('Не найден ID брони.');
+
+    setPaymentLoading(true);
+
+    try {
+      const response = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ booking_id: bookingId })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Не удалось создать ссылку на оплату');
+      }
+
+      if (!result.checkout_url) {
+        throw new Error('Stripe не вернул ссылку на оплату.');
+      }
+
+      window.location.href = result.checkout_url;
+    } catch (error) {
+      alert(error.message);
+      setPaymentLoading(false);
+    }
+  }
+
+
   if (view === 'myBookings') {
     return (
       <main className="app">
@@ -749,6 +802,12 @@ function App() {
               <p>{booking.start_date} — {booking.end_date}</p>
               <p>{booking.days_count} дней · {booking.total_price} €</p>
               {booking.prepayment_amount > 0 && <p>Предоплата: {booking.prepayment_amount} € · {booking.prepayment_status === 'paid' ? 'оплачена' : 'ожидается'}</p>}
+              {booking.prepayment_amount > 0 && booking.prepayment_status !== 'paid' && (
+                <button className="payment-btn small" onClick={() => payPrepayment(booking.id)} disabled={paymentLoading}>
+                  <CreditCard size={16} />
+                  {paymentLoading ? 'Открываем оплату...' : 'Оплатить предоплату картой'}
+                </button>
+              )}
               {booking.remaining_amount !== null && booking.remaining_amount !== undefined && <p>Остаток при получении: {booking.remaining_amount} €</p>}
               {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
               {booking.included_km && <p>Включено: {booking.included_km} км</p>}
@@ -773,7 +832,11 @@ function App() {
             <p>Предоплата входит в стоимость аренды.</p>
             <p>Остаток при получении автомобиля: <b>{sentBooking.remaining_amount} €</b></p>
             <p>Залог оплачивается отдельно при получении автомобиля.</p>
-            <p className="hint">Менеджер отправит реквизиты и подтвердит бронь после поступления предоплаты.</p>
+            <button className="payment-btn" onClick={() => payPrepayment(sentBooking.id)} disabled={paymentLoading}>
+              <CreditCard size={18} />
+              {paymentLoading ? 'Открываем оплату...' : '💳 Оплатить предоплату онлайн'}
+            </button>
+            <p className="hint">После оплаты Stripe автоматически отметит предоплату как оплаченную.</p>
           </section>
         )}
         <button onClick={() => {
@@ -967,6 +1030,13 @@ function App() {
           <button className="secondary-btn" onClick={loadMyBookings}>📋 Мои бронирования</button>
         </div>
       </section>
+
+      {paymentNotice && (
+        <section className={`payment-notice ${paymentNotice.type}`}>
+          <span>{paymentNotice.text}</span>
+          <button type="button" onClick={() => setPaymentNotice(null)}>×</button>
+        </section>
+      )}
 
       {loading && (
         <div className="center">

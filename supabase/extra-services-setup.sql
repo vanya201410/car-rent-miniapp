@@ -79,3 +79,18 @@ alter table bookings add column if not exists remaining_amount numeric(10,2) def
 -- pending_prepayment — заявка создана, ожидает предоплату
 -- confirmed — предоплата отмечена админом, бронь подтверждена
 -- cancelled — бронь отменена/отклонена
+
+-- Stripe онлайн-оплата предоплаты.
+alter table bookings add column if not exists online_payment_status text default 'not_started';
+alter table bookings add column if not exists stripe_checkout_session_id text;
+alter table bookings add column if not exists stripe_payment_intent_id text;
+alter table bookings add column if not exists online_paid_amount numeric(10,2) default 0;
+alter table bookings add column if not exists online_paid_at timestamptz;
+alter table bookings add column if not exists payment_url text;
+alter table bookings add column if not exists payment_type text default 'prepayment';
+
+-- Новые статусы для онлайн-оплаты:
+-- checkout_created — Stripe-ссылка создана
+-- paid — предоплата успешно оплачена
+-- paid_conflict — деньги получены, но даты требуют ручной проверки
+-- payment_conflict — статус брони, если после оплаты обнаружилось пересечение дат
