@@ -97,6 +97,7 @@ export function bookingStatusText(status) {
   if (status === 'new') return 'новая';
   if (status === 'pending_prepayment') return 'ожидает предоплату ⏳';
   if (status === 'payment_conflict') return 'предоплата оплачена, нужна проверка ⚠️';
+  if (status === 'pending_manual_payment') return 'ожидает ручную оплату ⚠️';
   if (status === 'confirmed') return 'подтверждена ✅';
   if (status === 'cancelled') return 'отменена ❌';
   if (status === 'completed') return 'завершена 🏁';
@@ -137,7 +138,9 @@ export function buildAdminBookingText({ title, booking, car }) {
     `<b>Сумма:</b> ${escapeHtml(booking.total_price)} €`,
     booking.prepayment_amount ? `<b>Предоплата:</b> ${escapeHtml(booking.prepayment_amount)} €${booking.prepayment_status === 'paid' ? ' ✅' : ' ⏳'}` : '',
     booking.online_payment_status === 'paid' ? `<b>Онлайн-оплата:</b> оплачено ${escapeHtml(booking.online_paid_amount || booking.prepayment_amount || 0)} € через Stripe ✅` : '',
+    booking.online_payment_status === 'manual_requested' ? '<b>Оплата:</b> клиент не может оплатить онлайн, нужен ручной способ ⚠️' : '',
     booking.remaining_amount !== undefined && booking.remaining_amount !== null ? `<b>Остаток при получении:</b> ${escapeHtml(booking.remaining_amount)} €` : '',
+    booking.documents_status ? `<b>Документы:</b> ${escapeHtml(booking.documents_status)}` : '',
     car?.deposit ? `<b>Залог:</b> ${escapeHtml(car.deposit)} €` : '',
     extras.length ? `<b>Услуги:</b> ${escapeHtml(extras.join(', '))}` : '',
     '',

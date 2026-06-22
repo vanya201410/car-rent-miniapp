@@ -94,3 +94,25 @@ alter table bookings add column if not exists payment_type text default 'prepaym
 -- paid — предоплата успешно оплачена
 -- paid_conflict — деньги получены, но даты требуют ручной проверки
 -- payment_conflict — статус брони, если после оплаты обнаружилось пересечение дат
+
+-- Ручная оплата / альтернативная предоплата.
+alter table bookings add column if not exists manual_payment_requested_at timestamptz;
+alter table bookings add column if not exists manual_payment_note text;
+
+-- Документы водителя.
+alter table bookings add column if not exists documents_status text default 'not_submitted';
+alter table bookings add column if not exists documents_submitted_at timestamptz;
+alter table bookings add column if not exists documents_reviewed_at timestamptz;
+alter table bookings add column if not exists documents_phone text;
+alter table bookings add column if not exists driver_license_path text;
+alter table bookings add column if not exists identity_document_path text;
+
+-- Private bucket for sensitive client documents.
+insert into storage.buckets (id, name, public)
+values ('booking-documents', 'booking-documents', false)
+on conflict (id) do nothing;
+
+-- Новые статусы:
+-- pending_manual_payment — клиент не может оплатить онлайн, ожидает ручной способ оплаты
+-- manual_requested — статус online_payment_status для ручного запроса
+-- submitted / approved / rejected — статусы documents_status

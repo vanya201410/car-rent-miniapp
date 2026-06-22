@@ -17,6 +17,28 @@ function clientMessage({ status, booking, car }) {
     ].filter(Boolean).join('\n');
   }
 
+  if (status === 'documents_approved') {
+    return [
+      '✅ <b>Документы проверены</b>',
+      '',
+      `<b>Авто:</b> ${escapeHtml(car?.brand || '')} ${escapeHtml(car?.model || '')}`,
+      `<b>Даты:</b> ${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)}`,
+      '',
+      'Спасибо. Менеджер свяжется с вами для уточнения деталей выдачи автомобиля.'
+    ].join('\n');
+  }
+
+  if (status === 'documents_rejected') {
+    return [
+      '⚠️ <b>Нужно загрузить документы заново</b>',
+      '',
+      `<b>Авто:</b> ${escapeHtml(car?.brand || '')} ${escapeHtml(car?.model || '')}`,
+      `<b>Даты:</b> ${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)}`,
+      '',
+      'Пожалуйста, отправьте более четкие фото водительских прав и паспорта / NIE / DNI.'
+    ].join('\n');
+  }
+
   if (status === 'cancelled_by_admin') {
     return [
       '🚫 <b>Ваша бронь отменена</b>',
@@ -498,7 +520,7 @@ async function renderBookingsList({ supabase, botToken, chatId, messageId, statu
     .limit(10);
 
   if (status === 'new') {
-    query = query.in('status', ['new', 'pending_prepayment']);
+    query = query.in('status', ['new', 'pending_prepayment', 'pending_manual_payment']);
   } else {
     query = query.eq('status', status);
   }
@@ -523,6 +545,8 @@ async function renderBookingsList({ supabase, botToken, chatId, messageId, statu
       `#${booking.id} — ${escapeHtml(car?.brand || 'car')} ${escapeHtml(car?.model || '')}`,
       `${escapeHtml(booking.start_date)} — ${escapeHtml(booking.end_date)} · ${escapeHtml(booking.total_price)} €`,
       booking.prepayment_amount ? `Предоплата: ${escapeHtml(booking.prepayment_amount)} € · ${booking.prepayment_status === 'paid' ? 'оплачена' : 'ожидается'}` : '',
+      booking.online_payment_status === 'manual_requested' ? '⚠️ Клиент просит ручную оплату' : '',
+      booking.documents_status ? `Документы: ${escapeHtml(booking.documents_status)}` : '',
       `${escapeHtml(booking.customer_name)} · ${escapeHtml(booking.phone)}`
     ].filter(Boolean).join('\n');
   });
@@ -973,7 +997,7 @@ export default async function handler(req, res) {
     }
 
     const [action, bookingId] = callbackData.split(':');
-    const allowedActions = ['confirm_booking', 'prepayment_paid', 'decline_booking', 'cancel_booking'];
+    const allowedActions = ['confirm_booking', 'prepayment_paid', 'decline_booking', 'cancel_booking', 'documents_approved', 'documents_rejected'];
 
     if (!bookingId || !allowedActions.includes(action)) {
       await telegramApi(botToken, 'answerCallbackQuery', {
@@ -1004,6 +1028,55 @@ export default async function handler(req, res) {
       .select('*')
       .eq('id', booking.car_id)
       .single();
+
+    if (action === 'documents_approved' || action === 'documents_rejected') {
+      const approved = action === 'documents_approved';
+      const { data: updatedBooking, error: updateError } = await supabase
+        .from('bookings')
+        .update({
+          documents_status: approved ? 'approved' : 'rejected',
+          documents_reviewed_at: new Date().toISOString()
+        })
+        .eq('id', bookingId)
+        .select()
+        .single();
+
+      if (updateError) {
+        await telegramApi(botToken, 'answerCallbackQuery', {
+          callback_query_id: callback.id,
+          text: 'Ошибка обновления документов',
+          show_alert: true
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      await telegramApi(botToken, 'answerCallbackQuery', {
+        callback_query_id: callback.id,
+        text: approved ? 'Документы отмечены как проверенные' : 'Документы отмечены как неподходящие',
+        show_alert: false
+      });
+
+      await telegramApi(botToken, 'editMessageText', {
+        chat_id: callback.message.chat.id,
+        message_id: callback.message.message_id,
+        text: buildAdminBookingText({
+          title: approved ? '✅ <b>Документы проверены</b>' : '❌ <b>Документы не подходят</b>',
+          booking: updatedBooking,
+          car
+        }),
+        parse_mode: 'HTML'
+      });
+
+      if (updatedBooking.telegram_user_id) {
+        await telegramApi(botToken, 'sendMessage', {
+          chat_id: updatedBooking.telegram_user_id,
+          text: clientMessage({ status: approved ? 'documents_approved' : 'documents_rejected', booking: updatedBooking, car }),
+          parse_mode: 'HTML'
+        });
+      }
+
+      return res.status(200).json({ ok: true });
+    }
 
     let newStatus = 'cancelled';
     let callbackText = 'Заявка отменена';

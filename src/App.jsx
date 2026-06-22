@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Calendar, Car, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, Fuel, Loader2, MapPin, Send, Users } from 'lucide-react';
+import { Calendar, Car, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, Fuel, Loader2, MapPin, Send, Upload, Users } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -149,6 +149,7 @@ function bookingStatusLabel(status) {
   if (status === 'new') return 'Ожидает подтверждения';
   if (status === 'pending_prepayment') return 'Ожидает предоплату';
   if (status === 'payment_conflict') return 'Оплачено, нужна проверка';
+  if (status === 'pending_manual_payment') return 'Ручная оплата';
   if (status === 'confirmed') return 'Подтверждена';
   if (status === 'cancelled') return 'Отменена';
   if (status === 'completed') return 'Завершена';
@@ -237,6 +238,148 @@ function CarImage({ car, className = '' }) {
     <div className={`image-placeholder ${className}`}>
       <Car size={36} />
     </div>
+  );
+}
+
+
+function fileToCompressedImagePayload(file, kind) {
+  return new Promise((resolve, reject) => {
+    if (!file) return reject(new Error('Файл не выбран.'));
+    if (!String(file.type || '').startsWith('image/')) {
+      return reject(new Error('Загрузите фото документа в формате изображения.'));
+    }
+
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Не удалось обработать фото.'));
+      img.onload = () => {
+        const maxSide = 1600;
+        let { width, height } = img;
+
+        if (width > maxSide || height > maxSide) {
+          const ratio = Math.min(maxSide / width, maxSide / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.78);
+        resolve({
+          name: `${kind}-${Date.now()}.jpg`,
+          type: 'image/jpeg',
+          data_url: dataUrl
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function documentsStatusText(status) {
+  if (status === 'submitted') return 'загружены, ожидают проверки';
+  if (status === 'approved') return 'проверены';
+  if (status === 'rejected') return 'нужно загрузить заново';
+  return 'не загружены';
+}
+
+function DocumentsUploadCard({ booking, defaultPhone = '', onUploaded }) {
+  const [phone, setPhone] = useState(defaultPhone || booking?.phone || '');
+  const [driverLicense, setDriverLicense] = useState(null);
+  const [identityDoc, setIdentityDoc] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState(null);
+
+  const alreadySubmitted = ['submitted', 'approved'].includes(booking?.documents_status);
+
+  async function uploadDocuments() {
+    if (!booking?.id) return alert('Не найден ID брони.');
+    if (!phone.trim()) return alert('Введите телефон.');
+    if (!driverLicense) return alert('Загрузите фото водительских прав.');
+    if (!identityDoc) return alert('Загрузите фото паспорта / NIE / DNI.');
+
+    setLoading(true);
+    setNotice(null);
+
+    try {
+      const [driverLicensePayload, identityPayload] = await Promise.all([
+        fileToCompressedImagePayload(driverLicense, 'driver-license'),
+        fileToCompressedImagePayload(identityDoc, 'identity-document')
+      ]);
+
+      const response = await fetch('/api/upload-documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking_id: booking.id,
+          phone,
+          driver_license: driverLicensePayload,
+          identity_document: identityPayload
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Не удалось загрузить документы.');
+      }
+
+      setNotice('✅ Документы загружены. Менеджер проверит их и свяжется с вами.');
+      setDriverLicense(null);
+      setIdentityDoc(null);
+      onUploaded?.(result.booking);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="card documents-card">
+      <h2>Документы водителя</h2>
+      <p className="muted">Для подготовки аренды загрузите фото водительских прав, фото паспорта / NIE / DNI и укажите телефон.</p>
+      <p className="hint">Документы нужны для оформления аренды, проверки водителя и возможной идентификации при штрафах.</p>
+
+      {booking?.documents_status && (
+        <div className={`documents-status status-${booking.documents_status}`}>
+          Статус документов: <b>{documentsStatusText(booking.documents_status)}</b>
+        </div>
+      )}
+
+      {!alreadySubmitted && (
+        <>
+          <label>
+            Телефон
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+34..." />
+          </label>
+
+          <label>
+            Фото водительских прав
+            <input type="file" accept="image/*" onChange={(e) => setDriverLicense(e.target.files?.[0] || null)} />
+          </label>
+
+          <label>
+            Фото паспорта / NIE / DNI
+            <input type="file" accept="image/*" onChange={(e) => setIdentityDoc(e.target.files?.[0] || null)} />
+          </label>
+
+          <button className="secondary-action-btn" onClick={uploadDocuments} disabled={loading}>
+            {loading ? <Loader2 size={18} className="spin" /> : <Upload size={18} />}
+            {loading ? 'Загружаем...' : '📄 Загрузить документы'}
+          </button>
+        </>
+      )}
+
+      {notice && <p className="success-note">{notice}</p>}
+    </section>
   );
 }
 
@@ -476,6 +619,7 @@ function App() {
   const [sentBooking, setSentBooking] = useState(null);
   const [sending, setSending] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [manualPaymentLoading, setManualPaymentLoading] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState(null);
   const [extras, setExtras] = useState({});
   const [rulesAccepted, setRulesAccepted] = useState(false);
@@ -766,6 +910,43 @@ function App() {
     }
   }
 
+  async function requestManualPayment(bookingId) {
+    if (!bookingId) return alert('Не найден ID брони.');
+
+    setManualPaymentLoading(true);
+
+    try {
+      const response = await fetch('/api/manual-payment-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ booking_id: bookingId })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Не удалось отправить запрос менеджеру.');
+      }
+
+      alert('Запрос отправлен менеджеру. Бронь пока не подтверждена.');
+
+      if (result.booking) {
+        setSentBooking((prev) => (prev?.id === result.booking.id ? result.booking : prev));
+        setMyBookings((prev) => prev.map((item) => item.id === result.booking.id ? { ...item, ...result.booking } : item));
+      }
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setManualPaymentLoading(false);
+    }
+  }
+
+  function updateBookingInState(updatedBooking) {
+    if (!updatedBooking) return;
+    setSentBooking((prev) => (prev?.id === updatedBooking.id ? { ...prev, ...updatedBooking } : prev));
+    setMyBookings((prev) => prev.map((item) => item.id === updatedBooking.id ? { ...item, ...updatedBooking } : item));
+  }
+
 
   if (view === 'myBookings') {
     return (
@@ -803,15 +984,24 @@ function App() {
               <p>{booking.days_count} дней · {booking.total_price} €</p>
               {booking.prepayment_amount > 0 && <p>Предоплата: {booking.prepayment_amount} € · {booking.prepayment_status === 'paid' ? 'оплачена' : 'ожидается'}</p>}
               {booking.prepayment_amount > 0 && booking.prepayment_status !== 'paid' && (
-                <button className="payment-btn small" onClick={() => payPrepayment(booking.id)} disabled={paymentLoading}>
-                  <CreditCard size={16} />
-                  {paymentLoading ? 'Открываем оплату...' : 'Оплатить предоплату картой'}
-                </button>
+                <div className="booking-actions">
+                  <button className="payment-btn small" onClick={() => payPrepayment(booking.id)} disabled={paymentLoading}>
+                    <CreditCard size={16} />
+                    {paymentLoading ? 'Открываем оплату...' : 'Оплатить предоплату картой'}
+                  </button>
+                  <button className="manual-payment-btn small" onClick={() => requestManualPayment(booking.id)} disabled={manualPaymentLoading}>
+                    ❓ Не могу оплатить онлайн
+                  </button>
+                </div>
               )}
+              {booking.online_payment_status === 'manual_requested' && <p className="manual-status">Запрос ручной оплаты отправлен менеджеру.</p>}
               {booking.remaining_amount !== null && booking.remaining_amount !== undefined && <p>Остаток при получении: {booking.remaining_amount} €</p>}
               {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
               {booking.included_km && <p>Включено: {booking.included_km} км</p>}
               {booking.extra_km_price && <p>Доп. км: {booking.extra_km_price} €/км</p>}
+              {booking.status !== 'cancelled' && (
+                <DocumentsUploadCard booking={booking} defaultPhone={booking.phone || ''} onUploaded={updateBookingInState} />
+              )}
             </article>
           ))}
         </section>
@@ -836,8 +1026,15 @@ function App() {
               <CreditCard size={18} />
               {paymentLoading ? 'Открываем оплату...' : '💳 Оплатить предоплату онлайн'}
             </button>
+            <button className="manual-payment-btn" onClick={() => requestManualPayment(sentBooking.id)} disabled={manualPaymentLoading}>
+              ❓ Не могу оплатить онлайн
+            </button>
+            {sentBooking.online_payment_status === 'manual_requested' && <p className="manual-status">Запрос ручной оплаты отправлен менеджеру.</p>}
             <p className="hint">После оплаты Stripe автоматически отметит предоплату как оплаченную.</p>
           </section>
+        )}
+        {sentBooking && (
+          <DocumentsUploadCard booking={sentBooking} defaultPhone={form.phone} onUploaded={updateBookingInState} />
         )}
         <button onClick={() => {
           setBookingSent(false);
