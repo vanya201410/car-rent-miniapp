@@ -251,7 +251,319 @@ async function addCarPhoto({ supabase, carId, imageUrl, sortOrder }) {
       .eq('id', carId);
   }
 
+
   return data;
+}
+
+async function uploadBookingInspectionPhoto({ supabase, botToken, bookingId, stage, photo }) {
+  const fileId = photo.file_id;
+
+  const fileInfo = await telegramApi(botToken, 'getFile', { file_id: fileId });
+  const filePath = fileInfo?.result?.file_path;
+
+  if (!filePath) {
+    throw new Error('Не удалось получить файл из Telegram.');
+  }
+
+  const fileUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+  const fileResponse = await fetch(fileUrl);
+
+  if (!fileResponse.ok) {
+    throw new Error('Не удалось скачать фото из Telegram.');
+  }
+
+  const arrayBuffer = await fileResponse.arrayBuffer();
+  const extension = filePath.split('.').pop() || 'jpg';
+  const storagePath = `bookings/${bookingId}/${stage}/${Date.now()}-${fileId}.${extension}`;
+
+  const { error: uploadError } = await supabase
+    .storage
+    .from('booking-inspections')
+    .upload(storagePath, arrayBuffer, {
+      contentType: fileResponse.headers.get('content-type') || 'image/jpeg',
+      upsert: true
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  return storagePath;
+}
+
+async function addBookingInspectionPhoto({ supabase, bookingId, stage, storagePath, sortOrder }) {
+  const { data, error } = await supabase
+    .from('booking_inspection_photos')
+    .insert({
+      booking_id: bookingId,
+      stage,
+      storage_path: storagePath,
+      sort_order: sortOrder
+    })
+    .select()
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  const updatePayload = stage === 'before'
+    ? { pre_rental_photos_status: 'uploaded', pre_rental_photos_uploaded_at: new Date().toISOString() }
+    : { post_rental_photos_status: 'uploaded', post_rental_photos_uploaded_at: new Date().toISOString() };
+
+  await supabase
+    .from('bookings')
+    .update(updatePayload)
+    .eq('id', bookingId);
+
+  return data;
+}
+
+function inspectionStageLabel(stage) {
+  return stage === 'before' ? 'до выдачи' : 'после возврата';
+}
+
+function adminBookingActionMarkup(booking) {
+  return {
+    inline_keyboard: [
+      [
+        { text: '📸 Фото до выдачи', callback_data: `start_pre_photos:${booking.id}` },
+        { text: '📸 Фото после возврата', callback_data: `start_post_photos:${booking.id}` }
+      ],
+      [
+        { text: '💰 Залог получен', callback_data: `deposit_received:${booking.id}` },
+        { text: '✅ Залог возвращен', callback_data: `deposit_returned:${booking.id}` }
+      ],
+      [
+        { text: '⚠️ Удержать залог', callback_data: `hold_deposit:${booking.id}` },
+        { text: '🚦 Добавить штраф', callback_data: `add_fine:${booking.id}` }
+      ],
+      [
+        { text: '✅ Возврат без проблем', callback_data: `return_ok:${booking.id}` },
+        { text: '🧽 Нужна мойка', callback_data: `return_dirty:${booking.id}` }
+      ],
+      [
+        { text: '⛽ Не хватает топлива', callback_data: `return_fuel:${booking.id}` },
+        { text: '🕒 Опоздание', callback_data: `return_late:${booking.id}` }
+      ],
+      [
+        { text: '🏁 Завершить аренду', callback_data: `mark_completed:${booking.id}` },
+        { text: '🚫 Отменить бронь', callback_data: `cancel_booking:${booking.id}` }
+      ],
+      [
+        { text: '⛔ В черный список', callback_data: `blacklist_client:${booking.id}` }
+      ]
+    ]
+  };
+}
+
+async function startInspectionPhotoFlow({ supabase, botToken, chatId, booking, stage }) {
+  await saveAdminSession(supabase, chatId, 'inspection_photos', 'upload', {
+    booking_id: booking.id,
+    stage,
+    uploaded_count: 0
+  });
+
+  await telegramApi(botToken, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      `📸 <b>Фотоосмотр ${inspectionStageLabel(stage)}</b>`,
+      '',
+      `<b>Бронь:</b> #${escapeHtml(booking.id)}`,
+      '',
+      'Отправляй фото автомобиля по одному сообщению:',
+      '1. перед авто',
+      '2. зад авто',
+      '3. левый бок',
+      '4. правый бок',
+      '5. салон',
+      '6. приборная панель с пробегом',
+      '7. уровень топлива',
+      '8. колеса / диски',
+      '',
+      'Когда закончишь, напиши <code>/done</code>.',
+      'Чтобы отменить, напиши <code>/cancel</code>.'
+    ].join('\n'),
+    parse_mode: 'HTML'
+  });
+}
+
+async function handleInspectionPhotoFlow({ message, session, supabase, botToken, chatId }) {
+  const text = (message.text || '').trim();
+  const data = session.data || {};
+
+  if (text === '/cancel') {
+    await clearAdminSession(supabase, chatId);
+    await telegramApi(botToken, 'sendMessage', { chat_id: chatId, text: 'Фотоосмотр отменен.' });
+    return;
+  }
+
+  if (text === '/done') {
+    await clearAdminSession(supabase, chatId);
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: `✅ Фотоосмотр ${inspectionStageLabel(data.stage)} сохранен. Загружено фото: ${data.uploaded_count || 0}`
+    });
+    return;
+  }
+
+  const photos = message.photo || [];
+  if (!photos.length) {
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: 'Отправь фото автомобиля или напиши /done, когда закончишь.'
+    });
+    return;
+  }
+
+  const largestPhoto = photos[photos.length - 1];
+  const nextCount = Number(data.uploaded_count || 0) + 1;
+
+  try {
+    const storagePath = await uploadBookingInspectionPhoto({
+      supabase,
+      botToken,
+      bookingId: data.booking_id,
+      stage: data.stage,
+      photo: largestPhoto
+    });
+
+    await addBookingInspectionPhoto({
+      supabase,
+      bookingId: data.booking_id,
+      stage: data.stage,
+      storagePath,
+      sortOrder: nextCount
+    });
+
+    await saveAdminSession(supabase, chatId, 'inspection_photos', 'upload', {
+      ...data,
+      uploaded_count: nextCount
+    });
+
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: `✅ Фото ${nextCount} сохранено. Отправь следующее фото или напиши /done.`
+    });
+  } catch (error) {
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: 'Ошибка загрузки фото: ' + escapeHtml(error.message),
+      parse_mode: 'HTML'
+    });
+  }
+}
+
+async function startFinanceFlow({ supabase, botToken, chatId, booking, flow, title, prompt }) {
+  await saveAdminSession(supabase, chatId, flow, 'amount', { booking_id: booking.id });
+  await telegramApi(botToken, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      title,
+      '',
+      `<b>Бронь:</b> #${escapeHtml(booking.id)}`,
+      prompt,
+      '',
+      'Напиши сумму числом. Например: <code>60</code>',
+      'Чтобы отменить, напиши <code>/cancel</code>.'
+    ].join('\n'),
+    parse_mode: 'HTML'
+  });
+}
+
+async function handleFinanceFlow({ message, session, supabase, botToken, chatId }) {
+  const text = (message.text || '').trim();
+  const data = session.data || {};
+
+  if (text === '/cancel') {
+    await clearAdminSession(supabase, chatId);
+    await telegramApi(botToken, 'sendMessage', { chat_id: chatId, text: 'Действие отменено.' });
+    return;
+  }
+
+  if (session.step === 'amount') {
+    const amount = numberFromText(text);
+    if (!amount || amount <= 0) {
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Напиши сумму числом. Например: 60'
+      });
+      return;
+    }
+
+    await saveAdminSession(supabase, chatId, session.flow, 'reason', { ...data, amount });
+    await telegramApi(botToken, 'sendMessage', {
+      chat_id: chatId,
+      text: session.flow === 'hold_deposit'
+        ? 'Напиши причину удержания залога. Например: царапина на диске, мойка салона, топливо.'
+        : 'Напиши причину/описание штрафа. Например: штраф за парковку, платная дорога, камера скорости.'
+    });
+    return;
+  }
+
+  if (session.step === 'reason') {
+    const reason = text || 'без описания';
+    const bookingId = data.booking_id;
+    const amount = Number(data.amount || 0);
+    const now = new Date().toISOString();
+
+    if (session.flow === 'hold_deposit') {
+      await supabase
+        .from('bookings')
+        .update({
+          deposit_status: 'partially_held',
+          deposit_held_amount: amount,
+          deposit_hold_reason: reason,
+          deposit_updated_at: now,
+          return_status: 'problem'
+        })
+        .eq('id', bookingId);
+
+      await supabase
+        .from('booking_charges')
+        .insert({
+          booking_id: bookingId,
+          category: 'deposit_hold',
+          amount,
+          description: reason,
+          status: 'charged'
+        });
+
+      await clearAdminSession(supabase, chatId);
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ Удержание залога сохранено: ${amount} €\nПричина: ${escapeHtml(reason)}`,
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+
+    if (session.flow === 'add_fine') {
+      await supabase
+        .from('booking_charges')
+        .insert({
+          booking_id: bookingId,
+          category: 'fine',
+          amount,
+          description: reason,
+          admin_fee: 25,
+          status: 'pending_payment'
+        });
+
+      await supabase
+        .from('bookings')
+        .update({ has_pending_charges: true })
+        .eq('id', bookingId);
+
+      await clearAdminSession(supabase, chatId);
+      await telegramApi(botToken, 'sendMessage', {
+        chat_id: chatId,
+        text: `🚦 Штраф добавлен: ${amount} € + админ-сбор 25 €\nПричина: ${escapeHtml(reason)}`,
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+  }
 }
 
 async function handleAddCarFlow({ message, session, supabase, botToken, chatId }) {
@@ -551,16 +863,31 @@ async function renderBookingsList({ supabase, botToken, chatId, messageId, statu
     ].filter(Boolean).join('\n');
   });
 
-  const keyboard = (bookings || []).map((booking) => {
+  const keyboard = (bookings || []).flatMap((booking) => {
     if (status === 'new') {
-      return [
+      return [[
         { text: `💰 Оплата #${booking.id}`, callback_data: `prepayment_paid:${booking.id}` },
         { text: `❌ #${booking.id}`, callback_data: `decline_booking:${booking.id}` }
-      ];
+      ]];
     }
 
     return [
-      { text: `🚫 Отменить #${booking.id}`, callback_data: `cancel_booking:${booking.id}` }
+      [
+        { text: `📸 До #${booking.id}`, callback_data: `start_pre_photos:${booking.id}` },
+        { text: `📸 После #${booking.id}`, callback_data: `start_post_photos:${booking.id}` }
+      ],
+      [
+        { text: `💰 Залог #${booking.id}`, callback_data: `deposit_received:${booking.id}` },
+        { text: `✅ Возврат #${booking.id}`, callback_data: `deposit_returned:${booking.id}` }
+      ],
+      [
+        { text: `⚠️ Удержать #${booking.id}`, callback_data: `hold_deposit:${booking.id}` },
+        { text: `🚦 Штраф #${booking.id}`, callback_data: `add_fine:${booking.id}` }
+      ],
+      [
+        { text: `🏁 Завершить #${booking.id}`, callback_data: `mark_completed:${booking.id}` },
+        { text: `🚫 Отменить #${booking.id}`, callback_data: `cancel_booking:${booking.id}` }
+      ]
     ];
   });
 
@@ -902,6 +1229,16 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true });
       }
 
+      if (session?.flow === 'inspection_photos') {
+        await handleInspectionPhotoFlow({ message: update.message, session, supabase, botToken, chatId });
+        return res.status(200).json({ ok: true });
+      }
+
+      if (session?.flow === 'hold_deposit' || session?.flow === 'add_fine') {
+        await handleFinanceFlow({ message: update.message, session, supabase, botToken, chatId });
+        return res.status(200).json({ ok: true });
+      }
+
       await handleAdminCommand({ text, supabase, botToken, chatId });
       return res.status(200).json({ ok: true });
     }
@@ -997,7 +1334,7 @@ export default async function handler(req, res) {
     }
 
     const [action, bookingId] = callbackData.split(':');
-    const allowedActions = ['confirm_booking', 'prepayment_paid', 'decline_booking', 'cancel_booking', 'documents_approved', 'documents_rejected'];
+    const allowedActions = ['confirm_booking', 'prepayment_paid', 'decline_booking', 'cancel_booking', 'documents_approved', 'documents_rejected', 'start_pre_photos', 'start_post_photos', 'deposit_received', 'deposit_returned', 'hold_deposit', 'add_fine', 'return_ok', 'return_dirty', 'return_fuel', 'return_late', 'mark_completed', 'blacklist_client'];
 
     if (!bookingId || !allowedActions.includes(action)) {
       await telegramApi(botToken, 'answerCallbackQuery', {
@@ -1028,6 +1365,162 @@ export default async function handler(req, res) {
       .select('*')
       .eq('id', booking.car_id)
       .single();
+
+    if (action === 'start_pre_photos' || action === 'start_post_photos') {
+      const stage = action === 'start_pre_photos' ? 'before' : 'after';
+      await telegramApi(botToken, 'answerCallbackQuery', {
+        callback_query_id: callback.id,
+        text: stage === 'before' ? 'Загружаем фото до выдачи' : 'Загружаем фото после возврата',
+        show_alert: false
+      });
+      await startInspectionPhotoFlow({
+        supabase,
+        botToken,
+        chatId: String(callback.message.chat.id),
+        booking,
+        stage
+      });
+      return res.status(200).json({ ok: true });
+    }
+
+    if (action === 'hold_deposit') {
+      await telegramApi(botToken, 'answerCallbackQuery', { callback_query_id: callback.id, text: 'Удержание залога' });
+      await startFinanceFlow({
+        supabase,
+        botToken,
+        chatId: String(callback.message.chat.id),
+        booking,
+        flow: 'hold_deposit',
+        title: '⚠️ <b>Удержание залога</b>',
+        prompt: 'Сначала укажи сумму, которую нужно удержать из залога.'
+      });
+      return res.status(200).json({ ok: true });
+    }
+
+    if (action === 'add_fine') {
+      await telegramApi(botToken, 'answerCallbackQuery', { callback_query_id: callback.id, text: 'Добавляем штраф' });
+      await startFinanceFlow({
+        supabase,
+        botToken,
+        chatId: String(callback.message.chat.id),
+        booking,
+        flow: 'add_fine',
+        title: '🚦 <b>Добавить штраф / платную дорогу</b>',
+        prompt: 'Сначала укажи сумму штрафа или платной дороги. Админ-сбор 25 € добавится отдельно.'
+      });
+      return res.status(200).json({ ok: true });
+    }
+
+    if (action === 'blacklist_client') {
+      const { error: blacklistError } = await supabase
+        .from('blocked_clients')
+        .upsert({
+          telegram_user_id: booking.telegram_user_id ? String(booking.telegram_user_id) : null,
+          telegram_username: booking.telegram_username || null,
+          phone: booking.phone || null,
+          customer_name: booking.customer_name || null,
+          reason: `Добавлен из брони #${booking.id}`,
+          booking_id: booking.id,
+          is_active: true
+        }, { onConflict: 'booking_id' });
+
+      await telegramApi(botToken, 'answerCallbackQuery', {
+        callback_query_id: callback.id,
+        text: blacklistError ? 'Ошибка черного списка' : 'Клиент добавлен в черный список',
+        show_alert: Boolean(blacklistError)
+      });
+      return res.status(200).json({ ok: true });
+    }
+
+    if (['deposit_received', 'deposit_returned', 'return_ok', 'return_dirty', 'return_fuel', 'return_late', 'mark_completed'].includes(action)) {
+      const now = new Date().toISOString();
+      const updatePayload = {};
+      let title = '✅ <b>Бронь обновлена</b>';
+      let answerText = 'Обновлено';
+
+      if (action === 'deposit_received') {
+        updatePayload.deposit_status = 'received';
+        updatePayload.deposit_received_at = now;
+        updatePayload.deposit_updated_at = now;
+        title = '💰 <b>Залог получен</b>';
+        answerText = 'Залог отмечен как полученный';
+      }
+
+      if (action === 'deposit_returned') {
+        updatePayload.deposit_status = 'returned';
+        updatePayload.deposit_returned_at = now;
+        updatePayload.deposit_updated_at = now;
+        title = '✅ <b>Залог возвращен</b>';
+        answerText = 'Залог отмечен как возвращенный';
+      }
+
+      if (action === 'return_ok') {
+        updatePayload.return_status = 'ok';
+        updatePayload.return_checked_at = now;
+        title = '✅ <b>Машина возвращена без проблем</b>';
+        answerText = 'Возврат без проблем';
+      }
+
+      if (action === 'return_dirty') {
+        updatePayload.return_status = 'dirty';
+        updatePayload.return_checked_at = now;
+        title = '🧽 <b>Отмечена мойка / загрязнение</b>';
+        answerText = 'Отмечено загрязнение';
+      }
+
+      if (action === 'return_fuel') {
+        updatePayload.return_status = 'fuel_missing';
+        updatePayload.return_checked_at = now;
+        title = '⛽ <b>Отмечено недостающее топливо</b>';
+        answerText = 'Отмечено топливо';
+      }
+
+      if (action === 'return_late') {
+        updatePayload.return_status = 'late';
+        updatePayload.return_checked_at = now;
+        title = '🕒 <b>Отмечено опоздание</b>';
+        answerText = 'Отмечено опоздание';
+      }
+
+      if (action === 'mark_completed') {
+        updatePayload.status = 'completed';
+        updatePayload.completed_at = now;
+        title = '🏁 <b>Аренда завершена</b>';
+        answerText = 'Аренда завершена';
+      }
+
+      const { data: updatedBooking, error: updateError } = await supabase
+        .from('bookings')
+        .update(updatePayload)
+        .eq('id', bookingId)
+        .select()
+        .single();
+
+      if (updateError) {
+        await telegramApi(botToken, 'answerCallbackQuery', {
+          callback_query_id: callback.id,
+          text: 'Ошибка обновления',
+          show_alert: true
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      await telegramApi(botToken, 'answerCallbackQuery', {
+        callback_query_id: callback.id,
+        text: answerText,
+        show_alert: false
+      });
+
+      await telegramApi(botToken, 'editMessageText', {
+        chat_id: callback.message.chat.id,
+        message_id: callback.message.message_id,
+        text: buildAdminBookingText({ title, booking: updatedBooking, car }),
+        parse_mode: 'HTML',
+        reply_markup: adminBookingActionMarkup(updatedBooking)
+      });
+
+      return res.status(200).json({ ok: true });
+    }
 
     if (action === 'documents_approved' || action === 'documents_rejected') {
       const approved = action === 'documents_approved';
@@ -1107,13 +1600,7 @@ export default async function handler(req, res) {
       callbackText = action === 'prepayment_paid' ? 'Предоплата отмечена, бронь подтверждена' : 'Заявка подтверждена';
       adminTitle = action === 'prepayment_paid' ? '✅ <b>Предоплата получена. Бронь подтверждена</b>' : '✅ <b>Заявка подтверждена</b>';
       clientStatus = 'confirmed';
-      replyMarkup = {
-        inline_keyboard: [
-          [
-            { text: '🚫 Отменить бронь', callback_data: `cancel_booking:${booking.id}` }
-          ]
-        ]
-      };
+      replyMarkup = adminBookingActionMarkup(booking);
     }
 
     if (action === 'decline_booking') {

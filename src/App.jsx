@@ -999,6 +999,11 @@ function App() {
               {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
               {booking.included_km && <p>Включено: {booking.included_km} км</p>}
               {booking.extra_km_price && <p>Доп. км: {booking.extra_km_price} €/км</p>}
+              {booking.deposit_status && booking.deposit_status !== 'not_received' && <p>Залог: {booking.deposit_status === 'received' ? 'получен' : booking.deposit_status === 'returned' ? 'возвращен' : booking.deposit_status === 'partially_held' ? `удержано ${booking.deposit_held_amount || 0} €` : booking.deposit_status}</p>}
+              {booking.pre_rental_photos_status === 'uploaded' && <p>Фото до выдачи: загружены ✅</p>}
+              {booking.post_rental_photos_status === 'uploaded' && <p>Фото после возврата: загружены ✅</p>}
+              {booking.return_status && booking.return_status !== 'not_returned' && <p>Возврат авто: {booking.return_status}</p>}
+              {booking.has_pending_charges && <p className="manual-status">Есть дополнительные начисления / штрафы. Менеджер свяжется с вами.</p>}
               {booking.status !== 'cancelled' && (
                 <DocumentsUploadCard booking={booking} defaultPhone={booking.phone || ''} onUploaded={updateBookingInState} />
               )}
