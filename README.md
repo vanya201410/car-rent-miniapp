@@ -144,3 +144,9 @@ where not exists (select 1 from public.discount_rules where min_days = 14);
 Включить обратно:
 
 `/discounton 1`
+
+## Live Stripe payment
+
+Для реальных оплат используйте файл `LIVE_STRIPE_INSTALL.md`.
+Этот архив рассчитан на live-ключ Stripe `sk_live_...` и live webhook secret `whsec_...`.
+Тестовый webhook bypass удален.

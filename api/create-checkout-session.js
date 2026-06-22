@@ -87,6 +87,10 @@ async function createStripeCheckoutSession({ booking, car, req, paymentType }) {
     throw new Error('STRIPE_SECRET_KEY is missing in Vercel Environment Variables.');
   }
 
+  if (!String(stripeSecretKey).startsWith('sk_live_')) {
+    throw new Error('Для реальной оплаты в Vercel нужно поставить STRIPE_SECRET_KEY = sk_live_... Сейчас стоит тестовый или неверный ключ.');
+  }
+
   const appUrl = getBaseUrl(req);
   const config = getPaymentConfig({ booking, car, paymentType });
   const amountCents = euroToCents(config.amount);
