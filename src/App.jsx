@@ -881,7 +881,7 @@ function App() {
   }
 
 
-  async function payPrepayment(bookingId) {
+  async function startStripePayment(bookingId, paymentType = 'prepayment') {
     if (!bookingId) return alert('Не найден ID брони.');
 
     setPaymentLoading(true);
@@ -890,7 +890,7 @@ function App() {
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ booking_id: bookingId })
+        body: JSON.stringify({ booking_id: bookingId, payment_type: paymentType })
       });
 
       const result = await response.json();
@@ -908,6 +908,18 @@ function App() {
       alert(error.message);
       setPaymentLoading(false);
     }
+  }
+
+  function payPrepayment(bookingId) {
+    return startStripePayment(bookingId, 'prepayment');
+  }
+
+  function payFullRental(bookingId) {
+    return startStripePayment(bookingId, 'full_rental');
+  }
+
+  function payRemainingRental(bookingId) {
+    return startStripePayment(bookingId, 'remaining_rental');
   }
 
   async function requestManualPayment(bookingId) {
@@ -983,19 +995,32 @@ function App() {
               <p>{booking.start_date} — {booking.end_date}</p>
               <p>{booking.days_count} дней · {booking.total_price} €</p>
               {booking.prepayment_amount > 0 && <p>Предоплата: {booking.prepayment_amount} € · {booking.prepayment_status === 'paid' ? 'оплачена' : 'ожидается'}</p>}
+              {booking.rental_payment_status === 'paid' && <p className="paid-status">Аренда полностью оплачена онлайн ✅</p>}
+              {booking.remaining_amount !== null && booking.remaining_amount !== undefined && <p>Остаток аренды: {booking.remaining_amount} €</p>}
               {booking.prepayment_amount > 0 && booking.prepayment_status !== 'paid' && (
                 <div className="booking-actions">
                   <button className="payment-btn small" onClick={() => payPrepayment(booking.id)} disabled={paymentLoading}>
                     <CreditCard size={16} />
-                    {paymentLoading ? 'Открываем оплату...' : 'Оплатить предоплату картой'}
+                    {paymentLoading ? 'Открываем оплату...' : 'Оплатить предоплату'}
+                  </button>
+                  <button className="payment-btn small full-payment" onClick={() => payFullRental(booking.id)} disabled={paymentLoading}>
+                    <CreditCard size={16} />
+                    {paymentLoading ? 'Открываем оплату...' : 'Оплатить всю аренду'}
                   </button>
                   <button className="manual-payment-btn small" onClick={() => requestManualPayment(booking.id)} disabled={manualPaymentLoading}>
                     ❓ Не могу оплатить онлайн
                   </button>
                 </div>
               )}
+              {booking.prepayment_status === 'paid' && Number(booking.remaining_amount || 0) > 0 && booking.rental_payment_status !== 'paid' && (
+                <div className="booking-actions">
+                  <button className="payment-btn small full-payment" onClick={() => payRemainingRental(booking.id)} disabled={paymentLoading}>
+                    <CreditCard size={16} />
+                    {paymentLoading ? 'Открываем оплату...' : 'Оплатить остаток онлайн'}
+                  </button>
+                </div>
+              )}
               {booking.online_payment_status === 'manual_requested' && <p className="manual-status">Запрос ручной оплаты отправлен менеджеру.</p>}
-              {booking.remaining_amount !== null && booking.remaining_amount !== undefined && <p>Остаток при получении: {booking.remaining_amount} €</p>}
               {booking.extras_total > 0 && <p>Доп. услуги: {booking.extras_total} €</p>}
               {booking.included_km && <p>Включено: {booking.included_km} км</p>}
               {booking.extra_km_price && <p>Доп. км: {booking.extra_km_price} €/км</p>}
@@ -1022,20 +1047,25 @@ function App() {
         <p>Менеджер получил уведомление в Telegram и скоро свяжется с вами.</p>
         {sentBooking?.prepayment_amount > 0 && (
           <section className="card prepayment-card">
-            <h2>Предоплата для фиксации брони</h2>
-            <p><b>{sentBooking.prepayment_amount} €</b> — нужно внести, чтобы закрепить автомобиль за вами.</p>
-            <p>Предоплата входит в стоимость аренды.</p>
-            <p>Остаток при получении автомобиля: <b>{sentBooking.remaining_amount} €</b></p>
-            <p>Залог оплачивается отдельно при получении автомобиля.</p>
+            <h2>Оплата брони</h2>
+            <p><b>{sentBooking.prepayment_amount} €</b> — минимальная предоплата, чтобы закрепить автомобиль за вами.</p>
+            <p>Можно оплатить только предоплату или сразу всю аренду онлайн.</p>
+            <p>Сумма аренды: <b>{sentBooking.total_price} €</b></p>
+            <p>Остаток после предоплаты: <b>{sentBooking.remaining_amount} €</b></p>
+            <p>Залог оплачивается отдельно при получении автомобиля и не входит в онлайн-оплату аренды.</p>
             <button className="payment-btn" onClick={() => payPrepayment(sentBooking.id)} disabled={paymentLoading}>
               <CreditCard size={18} />
               {paymentLoading ? 'Открываем оплату...' : '💳 Оплатить предоплату онлайн'}
+            </button>
+            <button className="payment-btn full-payment" onClick={() => payFullRental(sentBooking.id)} disabled={paymentLoading}>
+              <CreditCard size={18} />
+              {paymentLoading ? 'Открываем оплату...' : '💳 Оплатить всю аренду онлайн'}
             </button>
             <button className="manual-payment-btn" onClick={() => requestManualPayment(sentBooking.id)} disabled={manualPaymentLoading}>
               ❓ Не могу оплатить онлайн
             </button>
             {sentBooking.online_payment_status === 'manual_requested' && <p className="manual-status">Запрос ручной оплаты отправлен менеджеру.</p>}
-            <p className="hint">После оплаты Stripe автоматически отметит предоплату как оплаченную.</p>
+            <p className="hint">После оплаты Stripe автоматически обновит статус брони.</p>
           </section>
         )}
         {sentBooking && (
@@ -1152,14 +1182,16 @@ function App() {
         </section>
 
         <section className="card prepayment-card">
-          <h2>Предоплата</h2>
+          <h2>Оплата</h2>
           <div className="mileage-box">
-            <b>Для фиксации брони: {prepaymentAmount || 0} €</b>
+            <b>Минимальная предоплата: {prepaymentAmount || 0} €</b>
             <span>Предоплата входит в стоимость аренды.</span>
-            <span>Остаток при получении автомобиля: {remainingAmount || 0} €</span>
+            <span>Можно оплатить предоплату или всю аренду онлайн после отправки заявки.</span>
+            <span>Сумма аренды: {totalPrice || 0} €</span>
+            <span>Остаток после предоплаты: {remainingAmount || 0} €</span>
             <span>Залог оплачивается отдельно при получении автомобиля.</span>
           </div>
-          <p className="hint">После отправки заявки менеджер пришлет реквизиты. Бронь подтверждается после поступления предоплаты.</p>
+          <p className="hint">Бронь подтверждается после предоплаты, полной онлайн-оплаты или ручного подтверждения менеджером.</p>
         </section>
 
         <section className="card rules-card">

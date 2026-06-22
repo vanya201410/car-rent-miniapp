@@ -88,12 +88,26 @@ alter table bookings add column if not exists online_paid_amount numeric(10,2) d
 alter table bookings add column if not exists online_paid_at timestamptz;
 alter table bookings add column if not exists payment_url text;
 alter table bookings add column if not exists payment_type text default 'prepayment';
+alter table bookings add column if not exists last_online_payment_type text;
+
+-- Полная онлайн-оплата аренды / оплата остатка.
+alter table bookings add column if not exists rental_payment_status text default 'not_paid';
+alter table bookings add column if not exists rental_paid_amount numeric(10,2) default 0;
+alter table bookings add column if not exists rental_paid_at timestamptz;
+alter table bookings add column if not exists full_payment_status text default 'not_started';
+alter table bookings add column if not exists full_payment_amount numeric(10,2) default 0;
+alter table bookings add column if not exists full_payment_paid_at timestamptz;
+alter table bookings add column if not exists remaining_payment_status text default 'not_started';
+alter table bookings add column if not exists remaining_paid_amount numeric(10,2) default 0;
+alter table bookings add column if not exists remaining_paid_at timestamptz;
 
 -- Новые статусы для онлайн-оплаты:
 -- checkout_created — Stripe-ссылка создана
--- paid — предоплата успешно оплачена
+-- paid — оплата успешно получена
 -- paid_conflict — деньги получены, но даты требуют ручной проверки
 -- payment_conflict — статус брони, если после оплаты обнаружилось пересечение дат
+-- payment_type: prepayment / full_rental / remaining_rental
+-- rental_payment_status: not_paid / checkout_created / partial / paid / paid_conflict
 
 -- Ручная оплата / альтернативная предоплата.
 alter table bookings add column if not exists manual_payment_requested_at timestamptz;

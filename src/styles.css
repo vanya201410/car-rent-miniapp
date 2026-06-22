@@ -839,3 +839,16 @@ button {
   padding: 10px 12px;
   font-size: 14px;
 }
+
+.full-payment {
+  background: #065f46;
+}
+
+.paid-status {
+  color: #065f46 !important;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  border-radius: 14px;
+  padding: 8px 10px;
+  font-weight: 700;
+}

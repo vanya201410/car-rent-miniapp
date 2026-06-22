@@ -1632,6 +1632,9 @@ export default async function handler(req, res) {
       updatePayload.prepayment_status = 'paid';
       updatePayload.prepayment_paid_at = new Date().toISOString();
       updatePayload.payment_method = booking.payment_method || 'manual_admin';
+      updatePayload.rental_payment_status = Number(booking.remaining_amount || 0) > 0 ? 'partial' : 'paid';
+      updatePayload.rental_paid_amount = Number(booking.prepayment_amount || 0);
+      updatePayload.rental_paid_at = new Date().toISOString();
     }
 
     const { data: updatedBooking, error: updateError } = await supabase
